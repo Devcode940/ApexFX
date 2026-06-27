@@ -555,107 +555,67 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       };
     });
+  }, [currentPrice, selectedSymbol, selectedTimeframe, activeData.length]);
 
-    // B. Calculate profits and losses for open ledger paper positions in real-time
-    setPositions((prevPositions) => {
-      const closedToLog: ClosedTrade[] = [];
-      const nextPositions = prevPositions.map((pos) => {
-        const priceItem = watchlistItems.find((item) => item.symbol === pos.symbol);
-        if (!priceItem) return pos;
+  // B. Calculate profits and losses for open ledger paper positions and SL/TP hits in real-time
+  useEffect(() => {
+    let nextDifferent = false;
+    const closedToLog: ClosedTrade[] = [];
 
-        const livePrice = priceItem.price;
-        const contractSize = 100000; // Standard forex contract size
+    const nextPositions = positions.map((pos) => {
+      const priceItem = watchlistItems.find((item) => item.symbol === pos.symbol);
+      if (!priceItem) return pos;
 
-        // Calculate direct leverage gain / loss in USD units
-        let pnl = 0;
-        if (pos.type === 'BUY') {
-          pnl = (livePrice - pos.entryPrice) * pos.amount * contractSize;
-        } else {
-          pnl = (pos.entryPrice - livePrice) * pos.amount * contractSize;
-        }
+      const livePrice = priceItem.price;
+      const contractSize = 100000; // Standard forex contract size
 
-        const nextPos = {
-          ...pos,
-          currentPrice: livePrice,
-          pnl: parseFloat(pnl.toFixed(2)),
-        };
+      // Calculate direct leverage gain / loss in USD units
+      let pnl = parseFloat(((pos.type === 'BUY' ? (livePrice - pos.entryPrice) : (pos.entryPrice - livePrice)) * pos.amount * contractSize).toFixed(2));
 
-        // Automatic SL / TP hits simulation trigger check
-        if (pos.sl !== undefined) {
-          if (pos.type === 'BUY' && livePrice <= pos.sl) {
-            // hit stop loss, execute auto liquidate
-            closedToLog.push({
-              id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-              symbol: pos.symbol,
-              type: pos.type,
-              entryPrice: pos.entryPrice,
-              exitPrice: pos.sl,
-              amount: pos.amount,
-              pnl: parseFloat(((pos.sl - pos.entryPrice) * pos.amount * contractSize).toFixed(2)),
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              closeReason: 'SL Hit'
-            });
-            return null;
-          }
-          if (pos.type === 'SELL' && livePrice >= pos.sl) {
-            closedToLog.push({
-              id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-              symbol: pos.symbol,
-              type: pos.type,
-              entryPrice: pos.entryPrice,
-              exitPrice: pos.sl,
-              amount: pos.amount,
-              pnl: parseFloat(((pos.entryPrice - pos.sl) * pos.amount * contractSize).toFixed(2)),
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              closeReason: 'SL Hit'
-            });
-            return null;
-          }
-        }
+      // Automatic SL / TP hits simulation trigger check
+      const isSlHit = pos.sl !== undefined && (pos.type === 'BUY' ? livePrice <= pos.sl : livePrice >= pos.sl);
+      const isTpHit = pos.tp !== undefined && (pos.type === 'BUY' ? livePrice >= pos.tp : livePrice <= pos.tp);
 
-        if (pos.tp !== undefined) {
-          if (pos.type === 'BUY' && livePrice >= pos.tp) {
-            // hit take profit limit
-            closedToLog.push({
-              id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-              symbol: pos.symbol,
-              type: pos.type,
-              entryPrice: pos.entryPrice,
-              exitPrice: pos.tp,
-              amount: pos.amount,
-              pnl: parseFloat(((pos.tp - pos.entryPrice) * pos.amount * contractSize).toFixed(2)),
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              closeReason: 'TP Hit'
-            });
-            return null;
-          }
-          if (pos.type === 'SELL' && livePrice <= pos.tp) {
-            closedToLog.push({
-              id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-              symbol: pos.symbol,
-              type: pos.type,
-              entryPrice: pos.entryPrice,
-              exitPrice: pos.tp,
-              amount: pos.amount,
-              pnl: parseFloat(((pos.entryPrice - pos.tp) * pos.amount * contractSize).toFixed(2)),
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              closeReason: 'TP Hit'
-            });
-            return null;
-          }
-        }
+      if (isSlHit || isTpHit) {
+        const exitPrice = isSlHit ? pos.sl! : pos.tp!;
+        const reason = isSlHit ? 'SL Hit' : 'TP Hit';
+        const exitPnl = parseFloat(((pos.type === 'BUY' ? (exitPrice - pos.entryPrice) : (pos.entryPrice - exitPrice)) * pos.amount * contractSize).toFixed(2));
 
-        return nextPos;
-      }).filter((p): p is TradePosition => p !== null);
-
-      if (closedToLog.length > 0) {
-        setClosedTrades((prev) => [...closedToLog, ...prev]);
+        closedToLog.push({
+          id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+          symbol: pos.symbol,
+          type: pos.type,
+          entryPrice: pos.entryPrice,
+          exitPrice,
+          amount: pos.amount,
+          pnl: exitPnl,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          closeReason: reason
+        });
+        nextDifferent = true;
+        return null;
       }
 
-      return nextPositions;
-    });
+      if (pos.currentPrice !== livePrice || pos.pnl !== pnl) {
+        nextDifferent = true;
+        return {
+          ...pos,
+          currentPrice: livePrice,
+          pnl,
+        };
+      }
 
-  }, [currentPrice, watchlistItems, selectedSymbol, selectedTimeframe, activeData.length]);
+      return pos;
+    }).filter((p): p is TradePosition => p !== null);
+
+    if (nextDifferent) {
+      setPositions(nextPositions);
+    }
+
+    if (closedToLog.length > 0) {
+      setClosedTrades((prev) => [...closedToLog, ...prev]);
+    }
+  }, [watchlistItems, positions]);
 
   // --- Open Paper Positions ---
   const handleOpenPosition = React.useCallback((type: 'BUY' | 'SELL', amount: number, sl?: number, tp?: number) => {
