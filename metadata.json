@@ -1,0 +1,6 @@
+{
+  "name": "ApexFX Terminal",
+  "description": "High-performance interactive Forex charting and professional analytical workspace. Real-time multi-indicator confluence scanner, advanced pattern detector, and risk management assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

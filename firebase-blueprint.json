@@ -1,0 +1,68 @@
+{
+  "collections": [
+    {
+      "name": "users",
+      "documentId": "{userId}",
+      "fields": [
+        { "name": "preferred_indicators", "type": "map", "optional": true },
+        { "name": "createdAt", "type": "timestamp", "optional": true }
+      ],
+      "rules": [
+        { "allow": ["read", "write"], "condition": "request.auth != null && request.auth.uid == userId" }
+      ]
+    },
+    {
+      "name": "positions",
+      "documentId": "{positionId}",
+      "fields": [
+        { "name": "userId", "type": "string" },
+        { "name": "symbol", "type": "string" },
+        { "name": "type", "type": "string" },
+        { "name": "entryPrice", "type": "number" },
+        { "name": "lots", "type": "number" },
+        { "name": "stopLoss", "type": "number", "optional": true },
+        { "name": "takeProfit", "type": "number", "optional": true },
+        { "name": "timestamp", "type": "number" },
+        { "name": "pips", "type": "number", "optional": true },
+        { "name": "profit", "type": "number", "optional": true }
+      ],
+      "rules": [
+        { "allow": ["read", "update", "delete"], "condition": "request.auth != null && resource.data.userId == request.auth.uid" },
+        { "allow": ["create"], "condition": "request.auth != null && request.resource.data.userId == request.auth.uid" }
+      ]
+    },
+    {
+      "name": "closed_trades",
+      "documentId": "{tradeId}",
+      "fields": [
+        { "name": "userId", "type": "string" },
+        { "name": "symbol", "type": "string" },
+        { "name": "type", "type": "string" },
+        { "name": "entryPrice", "type": "number" },
+        { "name": "exitPrice", "type": "number" },
+        { "name": "lots", "type": "number" },
+        { "name": "profit", "type": "number" },
+        { "name": "pips", "type": "number" },
+        { "name": "openTime", "type": "number" },
+        { "name": "closeTime", "type": "number" }
+      ],
+      "rules": [
+        { "allow": ["read", "update", "delete"], "condition": "request.auth != null && resource.data.userId == request.auth.uid" },
+        { "allow": ["create"], "condition": "request.auth != null && request.resource.data.userId == request.auth.uid" }
+      ]
+    },
+    {
+      "name": "drawings",
+      "documentId": "{drawingId}",
+      "fields": [
+        { "name": "userId", "type": "string" },
+        { "name": "symbol", "type": "string" },
+        { "name": "data", "type": "string" }
+      ],
+      "rules": [
+        { "allow": ["read", "update", "delete"], "condition": "request.auth != null && resource.data.userId == request.auth.uid" },
+        { "allow": ["create"], "condition": "request.auth != null && request.resource.data.userId == request.auth.uid" }
+      ]
+    }
+  ]
+}
