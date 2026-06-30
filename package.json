@@ -4,24 +4,35 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "tsx server.ts & sleep 2 && vite",
+    "dev:api": "tsx server.ts",
+    "dev:ui": "vite",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.108.2",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
     "firebase": "^12.15.0",
+    "helmet": "^8.1.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "recharts": "^3.9.0",
@@ -29,14 +40,22 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "vitest": "^3.2.1"
   }
 }

@@ -7,7 +7,8 @@ import {
   LineSeries, 
   HistogramSeries, 
   ColorType,
-  createSeriesMarkers
+  createSeriesMarkers,
+  Time
 } from 'lightweight-charts';
 import { Candlestick, TechnicalIndicatorsState, Pattern, Timeframe } from '../types';
 import {
@@ -189,9 +190,20 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
   useEffect(() => {
     try {
       const cached = localStorage.getItem(`forexinsight_drawings_${symbol}`);
-      setDrawings(cached ? JSON.parse(cached) : { horizontalLines: [], trendlines: [], annotations: [] });
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        setDrawings({
+          horizontalLines: parsed.horizontalLines || [],
+          trendlines: parsed.trendlines || [],
+          annotations: parsed.annotations || [],
+          riskRewards: parsed.riskRewards || [],
+          fibonacci: parsed.fibonacci || [],
+        });
+      } else {
+        setDrawings({ horizontalLines: [], trendlines: [], annotations: [], riskRewards: [], fibonacci: [] });
+      }
     } catch {
-      setDrawings({ horizontalLines: [], trendlines: [], annotations: [] });
+      setDrawings({ horizontalLines: [], trendlines: [], annotations: [], riskRewards: [], fibonacci: [] });
     }
     setActiveTool('none');
     setTrendlineStart(null);
@@ -799,7 +811,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
         const el = document.getElementById(`rr-tool-${tool.id}`);
         if (!el) return;
 
-        const startX = chart.timeScale().timeToCoordinate(tool.entry.time);
+        const startX = chart.timeScale().timeToCoordinate(tool.entry.time as Time);
         if (startX === null) {
           el.style.display = 'none';
           return;
@@ -836,8 +848,8 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
 
         // Sort times so x1 is earlier than x2
         const times = [tool.start.time, tool.end.time].sort((a, b) => a - b);
-        const startX = chart.timeScale().timeToCoordinate(times[0]);
-        const endX = chart.timeScale().timeToCoordinate(times[1]);
+        const startX = chart.timeScale().timeToCoordinate(times[0] as Time);
+        const endX = chart.timeScale().timeToCoordinate(times[1] as Time);
         
         if (startX === null) {
           el.style.display = 'none';
@@ -959,7 +971,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
 
           <button
             onClick={() => setIsExpandedFullScreen(!isExpandedFullScreen)}
-            className={`p-1.5 ${theme === 'dark' ? 'hover:bg-zinc-800 text-zinc-400 hover:text-white border-zinc-800 hover:border-zinc-700' : 'hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 border-zinc-200 hover:border-zinc-300'} rounded border transition-colors cursor-pointer flex items-center gap-1 text-xs font-mono font-bold`}
+            className={`p-1.5 ${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800 border-zinc-800 hover:border-zinc-700' : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 border-zinc-200 hover:border-zinc-300'} rounded border transition-colors cursor-pointer flex items-center gap-1 text-xs font-mono font-bold`}
             title={isExpandedFullScreen ? "Exit Fullscreen Screen" : "Maximize Full Chart Screen"}
           >
             {isExpandedFullScreen ? (
@@ -984,7 +996,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => { setActiveTool('none'); setTrendlineStart(null); }}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
-              activeTool === 'none' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              activeTool === 'none' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Normal Selection / Cursor"
           >
@@ -997,7 +1009,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
                 chartRef.current.timeScale().fitContent();
               }
             }}
-            className={`p-2 rounded-lg text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'} transition-all cursor-pointer flex items-center justify-center relative group`}
+            className={`p-2 rounded-lg ${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'} transition-all cursor-pointer flex items-center justify-center relative group`}
             title="Auto Fit Chart (Fit all candles on screen)"
           >
             <Expand className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
@@ -1007,7 +1019,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => setActiveTool('horizontal')}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center relative ${
-              activeTool === 'horizontal' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              activeTool === 'horizontal' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Horizontal Line (Support & Resistance Level)"
           >
@@ -1018,7 +1030,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => setActiveTool('trendline_start')}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center relative ${
-              activeTool === 'trendline_start' || activeTool === 'trendline_end' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              activeTool === 'trendline_start' || activeTool === 'trendline_end' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Trendline Tool (Click Start & End points)"
           >
@@ -1029,7 +1041,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => setActiveTool('annotation')}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center relative ${
-              activeTool === 'annotation' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              activeTool === 'annotation' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Text Label / Custom Note"
           >
@@ -1043,7 +1055,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => setActiveTool('rr_long')}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center relative ${
-              activeTool === 'rr_long' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              activeTool === 'rr_long' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Long Position (Risk/Reward)"
           >
@@ -1052,7 +1064,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => setActiveTool('rr_short')}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center relative ${
-              activeTool === 'rr_short' ? 'bg-red-600 text-white shadow-md shadow-red-950/40' : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              activeTool === 'rr_short' ? 'bg-red-600 text-white shadow-md shadow-red-950/40' : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Short Position (Risk/Reward)"
           >
@@ -1062,7 +1074,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => setActiveTool('fib_start')}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center relative ${
-              activeTool === 'fib_start' || activeTool === 'fib_end' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              activeTool === 'fib_start' || activeTool === 'fib_end' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40' : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Fibonacci Retracement"
           >
@@ -1099,7 +1111,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
           <button
             onClick={() => setShowDrawingsManager(!showDrawingsManager)}
             className={`p-2 rounded-lg transition-all cursor-pointer flex items-center justify-center ${
-              showDrawingsManager ? (theme === 'dark' ? 'bg-zinc-800 text-emerald-400 border border-zinc-700' : 'bg-zinc-100 text-emerald-600 border border-zinc-300') : `text-zinc-400 hover:text-white ${theme === 'dark' ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800'}`
+              showDrawingsManager ? (theme === 'dark' ? 'bg-zinc-800 text-emerald-400 border border-zinc-700' : 'bg-zinc-100 text-emerald-600 border border-zinc-300') : `${theme === 'dark' ? 'text-zinc-400 hover:text-white hover:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100'}`
             }`}
             title="Manage Active Drawing Layers"
           >

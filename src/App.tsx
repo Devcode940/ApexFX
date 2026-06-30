@@ -9,9 +9,10 @@ import { PatternPanel } from './components/PatternPanel';
 import { NewsPanel } from './components/NewsPanel';
 import { AiAssistant } from './components/AiAssistant';
 import { SupabaseSync } from './components/SupabaseSync';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { formatPrice, PAIRS_CONFIG } from './utils/forexData';
 
-const appLogo = '/src/assets/images/app_logo_1782444134483.jpg';
+import appLogo from './assets/images/app_logo_1782444134483.jpg';
 import { 
   Activity, 
   Clock, 
@@ -23,9 +24,11 @@ import {
 
 export default function App() {
   return (
-    <TradingProvider>
-      <TradingTerminal />
-    </TradingProvider>
+    <ErrorBoundary>
+      <TradingProvider>
+        <TradingTerminal />
+      </TradingProvider>
+    </ErrorBoundary>
   );
 }
 
@@ -314,7 +317,7 @@ function TradingTerminal() {
                 onClick={() => setMobileTab(tab)}
                 className={`py-2 text-[10px] font-bold text-center capitalize rounded-lg transition-all cursor-pointer ${
                   mobileTab === tab
-                    ? 'bg-emerald-650 bg-emerald-600 text-white shadow'
+                    ? 'bg-emerald-600 text-white shadow'
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
               >

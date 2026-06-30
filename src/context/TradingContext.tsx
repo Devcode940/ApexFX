@@ -9,14 +9,13 @@ import {
   TradingSignal 
 } from '../types';
 import {
-  generateDefaultWatchlist,
-  generateHistoricalData,
-  simulatePriceTick,
   detectPatterns,
   generateSignal,
   PAIRS_CONFIG,
   calculateVolatilityDetails
 } from '../utils/forexData';
+
+const CONTRACT_SIZE = 100000;
 
 interface TradingContextType {
   // Mobile / Navigation Tabs
@@ -104,7 +103,17 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [selectedSymbol, setSelectedSymbol] = useState<string>('EURUSD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1H');
   const [chartData, setChartData] = useState<Record<string, Record<string, any[]>>>({});
-  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => generateDefaultWatchlist());
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => 
+    Object.keys(PAIRS_CONFIG).map(symbol => ({
+      symbol,
+      name: PAIRS_CONFIG[symbol].name,
+      price: PAIRS_CONFIG[symbol].basePrice,
+      change: 0,
+      high: PAIRS_CONFIG[symbol].basePrice,
+      low: PAIRS_CONFIG[symbol].basePrice,
+      spread: PAIRS_CONFIG[symbol].spreadPips,
+    }))
+  );
   const [indicators, setIndicators] = useState<TechnicalIndicatorsState>(() => {
     const cached = localStorage.getItem('forexinsight_preferred_indicators');
     if (cached) {
@@ -121,7 +130,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
           };
         }
       } catch (e) {
-        console.error('Failed to parse cached indicators', e);
+        // Use default indicators on parse error
       }
     }
     return {
@@ -438,26 +447,22 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
               }
             }));
           } else {
-            console.warn('Real history failed or empty. Falling back to high-fidelity simulated chart data.');
-            const fallbackHistory = generateHistoricalData(selectedSymbol, selectedTimeframe, 200);
             setChartData((prev) => ({
               ...prev,
               [selectedSymbol]: {
                 ...(prev[selectedSymbol] || {}),
-                [selectedTimeframe]: fallbackHistory,
+                [selectedTimeframe]: [],
               }
             }));
           }
         }
       } catch (err) {
-        console.error('Failed to fetch historical data:', err);
         if (active) {
-          const fallbackHistory = generateHistoricalData(selectedSymbol, selectedTimeframe, 200);
           setChartData((prev) => ({
             ...prev,
             [selectedSymbol]: {
               ...(prev[selectedSymbol] || {}),
-              [selectedTimeframe]: fallbackHistory,
+              [selectedTimeframe]: [],
             }
           }));
         }
@@ -474,47 +479,6 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       active = false;
     };
   }, [selectedSymbol, selectedTimeframe]);
-
-  // --- Central Dynamic Price Ticking simulation loop ---
-  useEffect(() => {
-    if (wsConnected) return; // Bypass if live WebSocket is streaming rates
-
-    const runSimulationTick = () => {
-      // 1. Tick some watch list instruments
-      setWatchlistItems((prevItems) => {
-        const nextTickStates: Record<string, 'up' | 'down' | 'none'> = {};
-        const updatedList = prevItems.map((item) => {
-          // 40% probability of tick occurring per timer interval
-          if (Math.random() > 0.4) {
-            nextTickStates[item.symbol] = 'none';
-            return item;
-          }
-
-          const ticked = simulatePriceTick(item);
-          nextTickStates[item.symbol] = ticked.price > item.price ? 'up' : 'down';
-          return ticked;
-        });
-
-        // Set visual flash class triggers
-        setTickStates(nextTickStates);
-        // Clear flashes after 900ms
-        setTimeout(() => {
-          setTickStates((s) => {
-            const cleared = { ...s };
-            Object.keys(cleared).forEach((k) => {
-              if (cleared[k] !== 'none') cleared[k] = 'none';
-            });
-            return cleared;
-          });
-        }, 900);
-
-        return updatedList;
-      });
-    };
-
-    const interval = setInterval(runSimulationTick, 3000);
-    return () => clearInterval(interval);
-  }, [wsConnected]);
 
   // --- Update chart candlesticks and paper positions on price change ---
   const activeWatchItem = useMemo(() => {
@@ -567,19 +531,17 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (!priceItem) return pos;
 
       const livePrice = priceItem.price;
-      const contractSize = 100000; // Standard forex contract size
-
       // Calculate direct leverage gain / loss in USD units
-      let pnl = parseFloat(((pos.type === 'BUY' ? (livePrice - pos.entryPrice) : (pos.entryPrice - livePrice)) * pos.amount * contractSize).toFixed(2));
+      let pnl = parseFloat(((pos.type === 'BUY' ? (livePrice - pos.entryPrice) : (pos.entryPrice - livePrice)) * pos.amount * CONTRACT_SIZE).toFixed(2));
 
       // Automatic SL / TP hits simulation trigger check
       const isSlHit = pos.sl !== undefined && (pos.type === 'BUY' ? livePrice <= pos.sl : livePrice >= pos.sl);
       const isTpHit = pos.tp !== undefined && (pos.type === 'BUY' ? livePrice >= pos.tp : livePrice <= pos.tp);
 
       if (isSlHit || isTpHit) {
-        const exitPrice = isSlHit ? pos.sl! : pos.tp!;
+        const exitPrice = pos.sl ?? pos.tp;
         const reason = isSlHit ? 'SL Hit' : 'TP Hit';
-        const exitPnl = parseFloat(((pos.type === 'BUY' ? (exitPrice - pos.entryPrice) : (pos.entryPrice - exitPrice)) * pos.amount * contractSize).toFixed(2));
+        const exitPnl = parseFloat(((pos.type === 'BUY' ? (exitPrice - pos.entryPrice) : (pos.entryPrice - exitPrice)) * pos.amount * CONTRACT_SIZE).toFixed(2));
 
         closedToLog.push({
           id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
@@ -639,13 +601,12 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setPositions((prev) => {
       const target = prev.find((p) => p.id === id);
       if (target) {
-        const livePrice = target.currentPrice || currentPrice;
-        const contractSize = 100000;
+        const livePrice = target.currentPrice ?? currentPrice;
         let pnl = 0;
         if (target.type === 'BUY') {
-          pnl = (livePrice - target.entryPrice) * target.amount * contractSize;
+          pnl = (livePrice - target.entryPrice) * target.amount * CONTRACT_SIZE;
         } else {
-          pnl = (target.entryPrice - livePrice) * target.amount * contractSize;
+          pnl = (target.entryPrice - livePrice) * target.amount * CONTRACT_SIZE;
         }
 
         setClosedTrades((prevClosed) => [

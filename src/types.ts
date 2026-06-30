@@ -102,3 +102,81 @@ export interface NewsItem {
   sentiment: 'bullish' | 'bearish' | 'neutral';
   affectedPairs: string[];
 }
+
+// ============================================================================
+// API Response Types
+// ============================================================================
+
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  error?: string;
+  data?: T;
+}
+
+export interface ForexRatesResponse extends ApiResponse {
+  source?: string;
+  timestamp?: string;
+  rates?: {
+    EURUSD: number | null;
+    GBPUSD: number | null;
+    USDJPY: number | null;
+    AUDUSD: number | null;
+    USDCAD: number | null;
+    USDCHF: number | null;
+  };
+}
+
+export interface MarketPriceResponse extends ApiResponse {
+  rates?: Record<string, {
+    price: number;
+    high: number;
+    low: number;
+    change: number;
+  }>;
+  timestamp?: string;
+}
+
+export interface HistoricalDataResponse extends ApiResponse {
+  symbol?: string;
+  timeframe?: string;
+  data?: Candlestick[];
+}
+
+export interface QuoteResponse extends ApiResponse {
+  symbol?: string;
+  name?: string;
+  exchange?: string;
+  price?: number;
+  change?: number;
+  percent_change?: number;
+  previous_close?: number;
+  fifty_two_week?: {
+    low?: string;
+    high?: string;
+  };
+}
+
+export interface NewsResponse extends ApiResponse {
+  id?: number;
+  category?: string;
+  datetime?: number;
+  headline?: string;
+  source?: string;
+  url?: string;
+  summary?: string;
+  image?: string;
+  related?: string;
+}
+
+export interface HealthResponse {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  timestamp: string;
+  uptime: number;
+  environment: string;
+  services: {
+    websocket: number;
+    twelveData: boolean;
+    gemini: boolean;
+    finnhub: boolean;
+  };
+}
