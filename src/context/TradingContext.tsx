@@ -166,7 +166,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAiSnapshot(null);
   }, []);
 
-  // WebSocket connection state
+  // Connection state - now API-only (no WebSocket)
   const [wsConnected, setWsConnected] = useState<boolean>(false);
 
   // Paper Position Simulator (Read from LocalStorage or empty)
@@ -278,10 +278,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     fetchRealRates();
   }, []);
 
-  // --- Real-time price updates via WebSocket streaming with Polling Fallback ---
+  // --- Real-time price updates via API polling only (no WebSocket) ---
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let reconnectTimeout: any = null;
     let pollingInterval: any = null;
 
     const handlePricesUpdate = (rates: Record<string, any>) => {
@@ -335,7 +333,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const startPolling = () => {
       if (pollingInterval) return;
-      console.log('[Fallback Polling] Starting background HTTP polling for market rates...');
+      console.log('[API Polling] Starting background HTTP polling for market rates...');
+      setWsConnected(true);
       pollingInterval = setInterval(async () => {
         try {
           const response = await fetch('/api/market/prices');
@@ -345,66 +344,25 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
           }
         } catch (e) {
           // Silent catch to prevent console error spam
+          setWsConnected(false);
         }
-      }, 2500);
+      }, 3000);
     };
 
     const stopPolling = () => {
       if (pollingInterval) {
         clearInterval(pollingInterval);
         pollingInterval = null;
-        console.log('[Fallback Polling] Stopped background HTTP polling (WebSocket active)');
+        console.log('[API Polling] Stopped background HTTP polling');
+        setWsConnected(false);
       }
     };
 
-    const connect = () => {
-      try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}`;
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-          setWsConnected(true);
-          stopPolling();
-          console.log('[WebSocket] Real-time rates stream connected');
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'INITIAL_RATES' || data.type === 'PRICE_UPDATE') {
-              handlePricesUpdate(data.rates);
-            }
-          } catch (e) {
-            console.warn('[WebSocket] Message parsing error:', e);
-          }
-        };
-
-        ws.onclose = () => {
-          setWsConnected(false);
-          startPolling();
-          reconnectTimeout = setTimeout(connect, 5000);
-        };
-
-        ws.onerror = (err) => {
-          console.warn('[WebSocket] Connection failed. Fallback polling is keeping the prices live.', err);
-          ws?.close();
-        };
-      } catch (err) {
-        console.warn('[WebSocket] Setup failed:', err);
-        startPolling();
-        reconnectTimeout = setTimeout(connect, 5000);
-      }
-    };
-
-    connect();
-    // Start polling immediately so that we have live prices even if WebSocket is blocked or connecting
+    // Start polling immediately
     startPolling();
 
     return () => {
-      if (ws) ws.close();
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (pollingInterval) clearInterval(pollingInterval);
+      stopPolling();
     };
   }, []);
 

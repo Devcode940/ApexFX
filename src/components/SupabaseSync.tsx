@@ -266,8 +266,8 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
               <li>Add the credentials to your Vercel or local environment variables:</li>
             </ol>
             <div className="bg-black/40 p-2 rounded border border-zinc-850 font-mono text-[9px] text-zinc-300 space-y-1 mt-2">
-              <div>VITE_SUPABASE_URL="your-supabase-url"</div>
-              <div>VITE_SUPABASE_ANON_KEY="your-anon-key"</div>
+              <div>SUPABASE_URL=https://zrqscleekkenxfnrxvzg.supabase.co</div>
+              <div>SUPABASE_KEY=your-anon-key</div>
             </div>
             <p className="text-[10px] text-zinc-500 pt-1">
               Once these variables are set up, the Cloud Sync panel will activate automatically!

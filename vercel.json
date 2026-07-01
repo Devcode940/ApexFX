@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/index.ts",
+      "src": "server.ts",
       "use": "@vercel/node",
       "config": {
         "includeFiles": ["src/**"]
@@ -19,11 +19,11 @@
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "api/index.ts"
+      "dest": "server.ts"
     },
     {
       "src": "/health",
-      "dest": "api/index.ts"
+      "dest": "server.ts"
     },
     {
       "src": "/assets/(.*)",
@@ -43,8 +43,7 @@
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "X-XSS-Protection", "value": "1; mode=block" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        { "key": "X-XSS-Protection", "value": "1; mode=block" }
       ]
     }
   ]

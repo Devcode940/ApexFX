@@ -3,12 +3,12 @@ import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { createServer } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
 import helmet from 'helmet';
 import compression from 'compression';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import pino from 'pino';
+import { z } from 'zod';
 import { PAIRS_CONFIG } from './src/constants/config';
 
 // ============================================================================
@@ -17,17 +17,23 @@ import { PAIRS_CONFIG } from './src/constants/config';
 
 dotenv.config({ override: true });
 
-const ENV = {
-  NODE_ENV: process.env.NODE_ENV || 'development',
-  PORT: parseInt(process.env.PORT || '3000', 10),
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-  TWELVEDATA_API_KEY: process.env.TWELVEDATA_API_KEY,
-  FINNHUB_API_KEY: process.env.FINNHUB_API_KEY,
-  FOREXRATE_API_KEY: process.env.FOREXRATE_API_KEY,
-  CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
-  RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10), // 15 min
-  RATE_LIMIT_MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-} as const;
+// ============================================================================
+// Environment Configuration & Validation with Zod
+// ============================================================================
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  PORT: z.coerce.number().int().positive().default(3000),
+  GEMINI_API_KEY: z.string().optional(),
+  TWELVEDATA_API_KEY: z.string().min(1, 'TWELVEDATA_API_KEY is required'),
+  FINNHUB_API_KEY: z.string().optional(),
+  FOREXRATE_API_KEY: z.string().optional(),
+  CORS_ORIGIN: z.string().optional().default('*'),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+});
+
+const ENV = envSchema.parse(process.env);
 
 const isProduction = ENV.NODE_ENV === 'production';
 
@@ -47,22 +53,13 @@ const logger = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 });
 
-// Validate required environment variables
-function validateEnvironment(): void {
-  if (!ENV.TWELVEDATA_API_KEY) {
-    logger.error('TWELVEDATA_API_KEY is required for live market data');
-    process.exit(1);
-  }
-
-  if (!ENV.GEMINI_API_KEY) {
-    logger.warn('GEMINI_API_KEY not set - AI chat will be unavailable');
-  }
-  if (!ENV.FINNHUB_API_KEY) {
-    logger.warn('FINNHUB_API_KEY not set - news feed will be unavailable');
-  }
+// Log warnings for optional API keys
+if (!ENV.GEMINI_API_KEY) {
+  logger.warn('GEMINI_API_KEY not set - AI chat will be unavailable');
 }
-
-validateEnvironment();
+if (!ENV.FINNHUB_API_KEY) {
+  logger.warn('FINNHUB_API_KEY not set - news feed will be unavailable');
+}
 
 // ============================================================================
 // Express App Setup
@@ -70,7 +67,6 @@ validateEnvironment();
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
 
 // ============================================================================
 // Security & Performance Middleware
@@ -85,7 +81,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "wss:", "ws:", "https://api.twelvedata.com", "https://finnhub.io"],
+      connectSrc: ["'self'", "https://api.twelvedata.com", "https://finnhub.io"],
     },
   } : false,
   crossOriginEmbedderPolicy: false,
@@ -101,9 +97,16 @@ app.use(compression({
   threshold: 1024,
 }));
 
-// CORS
+// CORS - Secure configuration
+// In production, never allow wildcard origin with credentials
+const allowedOrigins = isProduction
+  ? ENV.CORS_ORIGIN === '*' 
+    ? ['https://apexfx-terminal.vercel.app', 'https://www.apexfx-terminal.com']
+    : [ENV.CORS_ORIGIN]
+  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173'];
+
 app.use(cors({
-  origin: ENV.CORS_ORIGIN === '*' ? true : ENV.CORS_ORIGIN,
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -140,6 +143,45 @@ const chatLimiter = rateLimit({
 // Body parsing with size limits
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
+
+// ============================================================================
+// Input Validation Schemas with Zod
+// ============================================================================
+
+// Symbol and timeframe validation
+const symbolSchema = z.enum(['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'GBPJPY', 'XAUUSD', 'XAGUSD']);
+const timeframeSchema = z.enum(['1m', '5m', '15m', '1H', '4H', 'D']);
+
+// Query parameter schemas
+const historyQuerySchema = z.object({
+  symbol: symbolSchema,
+  timeframe: timeframeSchema,
+});
+
+const quoteQuerySchema = z.object({
+  symbol: z.string().min(1),
+});
+
+const newsQuerySchema = z.object({
+  category: z.string().default('forex'),
+});
+
+const forexRateQuerySchema = z.object({
+  base: z.string().default('USD'),
+});
+
+// Body schemas
+const chatBodySchema = z.object({
+  messages: z.array(
+    z.object({
+      text: z.string().optional(),
+      image: z.string().optional(),
+    })
+  ).min(1),
+  selectedSymbol: z.string().optional(),
+  selectedTimeframe: z.string().optional(),
+  activeSignal: z.any().optional(),
+});
 
 // ============================================================================
 // Request Logging (Production)
@@ -184,7 +226,6 @@ app.get('/health', (req: Request, res: Response) => {
     uptime: process.uptime(),
     environment: ENV.NODE_ENV,
     services: {
-      websocket: wss.clients.size,
       twelveData: !!ENV.TWELVEDATA_API_KEY,
       gemini: !!ENV.GEMINI_API_KEY,
       finnhub: !!ENV.FINNHUB_API_KEY,
@@ -195,13 +236,13 @@ app.get('/health', (req: Request, res: Response) => {
 });
 
 // ============================================================================
-// WebSocket Price Streaming
+// Server Watchlist State (API-only, no WebSocket)
 // ============================================================================
 
 const PAIRS_CONFIG_WS: Record<string, { name: string; basePrice: number; pipDecimal: number }> = PAIRS_CONFIG;
 
-// Initialize watchlist with base prices (will be overwritten by real data)
-const serverWatchlist = Object.keys(PAIRS_CONFIG_WS).map(symbol => {
+// Server watchlist state - updated via API polling
+let serverWatchlist = Object.keys(PAIRS_CONFIG_WS).map(symbol => {
   const config = PAIRS_CONFIG_WS[symbol];
   return {
     symbol,
@@ -213,9 +254,10 @@ const serverWatchlist = Object.keys(PAIRS_CONFIG_WS).map(symbol => {
   };
 });
 
-async function fetchRealLatestPrices(): Promise<void> {
+// Fetch latest prices from Twelve Data and update server watchlist
+async function fetchAndUpdatePrices(): Promise<void> {
   if (!ENV.TWELVEDATA_API_KEY) {
-    logger.error('TWELVEDATA_API_KEY is required for live prices');
+    logger.debug('TWELVEDATA_API_KEY not set, using base prices');
     return;
   }
 
@@ -235,6 +277,7 @@ async function fetchRealLatestPrices(): Promise<void> {
       const symbol = symbolsMap[item.symbol];
       if (!symbol) return;
 
+      // API key is server-side only - never exposed to client
       const res = await fetch(`https://api.twelvedata.com/quote?symbol=${symbol}&apikey=${ENV.TWELVEDATA_API_KEY}`);
       if (res.ok) {
         const data = (await res.json()) as any;
@@ -251,61 +294,23 @@ async function fetchRealLatestPrices(): Promise<void> {
       }
     } catch (e) {
       // Silent catch to prevent console spam
+      logger.debug({ error: e }, 'Failed to fetch price for symbol');
     }
   });
 
   await Promise.allSettled(fetchPromises);
-}
-
-function broadcastPrices(): void {
-  const payload = JSON.stringify({
-    type: 'PRICE_UPDATE',
-    rates: serverWatchlist.reduce((acc, item) => {
-      acc[item.symbol] = {
-        price: item.price,
-        high: item.high,
-        low: item.low,
-        change: item.change,
-      };
-      return acc;
-    }, {} as Record<string, any>),
-    timestamp: new Date().toISOString()
-  });
-  
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
-  });
+  logger.debug('Price sync completed');
 }
 
 // Initial sync on server start
-fetchRealLatestPrices().then(() => {
+fetchAndUpdatePrices().then(() => {
   logger.info('Initial price sync completed');
-  broadcastPrices();
 });
 
-// Sync real latest quotes every 5 seconds
+// Sync real latest quotes every 3 seconds
 const priceSyncInterval = setInterval(() => {
-  fetchRealLatestPrices().then(() => broadcastPrices());
-}, 5000);
-
-wss.on('connection', (ws) => {
-  const initialPayload = JSON.stringify({
-    type: 'INITIAL_RATES',
-    rates: serverWatchlist.reduce((acc, item) => {
-      acc[item.symbol] = {
-        price: item.price,
-        high: item.high,
-        low: item.low,
-        change: item.change,
-      };
-      return acc;
-    }, {} as Record<string, any>),
-    timestamp: new Date().toISOString()
-  });
-  ws.send(initialPayload);
-});
+  fetchAndUpdatePrices();
+}, 3000);
 
 // ============================================================================
 // Gemini AI Client
@@ -377,13 +382,19 @@ app.get('/api/market/prices', (req: Request, res: Response) => {
   }));
 });
 
-// 3. Historical Chart Data (Twelve Data)
+// 3. Historical Chart Data (Twelve Data) - with validation
 app.get('/api/market/history', async (req: Request, res: Response) => {
   try {
-    const { symbol, timeframe } = req.query;
-    if (!symbol || !timeframe) {
-      return res.status(400).json(apiResponse.error('Symbol and timeframe are required', 400));
+    // Validate input with Zod
+    const parsed = historyQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json(apiResponse.error(
+        `Invalid parameters: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+        400
+      ));
     }
+    
+    const { symbol, timeframe } = parsed.data;
 
     if (!ENV.TWELVEDATA_API_KEY) {
       return res.status(503).json(apiResponse.error('Twelve Data API key not configured', 503));
@@ -400,7 +411,7 @@ app.get('/api/market/history', async (req: Request, res: Response) => {
       'XAGUSD': 'XAG/USD',
     };
 
-    const ticker = symbolsMap[symbol as string];
+    const ticker = symbolsMap[symbol];
     if (!ticker) {
       return res.status(400).json(apiResponse.error('Invalid symbol', 400));
     }
@@ -414,8 +425,9 @@ app.get('/api/market/history', async (req: Request, res: Response) => {
       'D': '1day',
     };
 
-    const interval = intervalMap[timeframe as string] || '1hour';
+    const interval = intervalMap[timeframe] || '1hour';
 
+    // API key is server-side only - never exposed to client
     const response = await fetch(
       `https://api.twelvedata.com/time_series?symbol=${ticker}&interval=${interval}&outputsize=200&apikey=${ENV.TWELVEDATA_API_KEY}`
     );
@@ -450,18 +462,25 @@ app.get('/api/market/history', async (req: Request, res: Response) => {
   }
 });
 
-// 4. AI Chat (with rate limiting)
+// 4. AI Chat (with rate limiting) - with validation
 app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
   try {
-    const { messages, selectedSymbol, selectedTimeframe, activeSignal } = req.body;
+    // Validate input with Zod
+    const parsed = chatBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json(apiResponse.error(
+        `Invalid request body: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+        400
+      ));
+    }
+    
+    const { messages, selectedSymbol, selectedTimeframe, activeSignal } = parsed.data;
     
     if (!ai) {
       return res.status(503).json(apiResponse.error('AI service unavailable', 503));
     }
 
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json(apiResponse.error('Invalid or missing messages array', 400));
-    }
+    // Validation already handled by Zod schema
 
     const contextStr = `You are the ApexFX AI Analyst in a professional trading platform.
 Current instrument: ${selectedSymbol}
@@ -499,13 +518,25 @@ Provide concise, professional trading analysis.`;
   }
 });
 
-// 5. Finnhub News Proxy
+// 5. Finnhub News Proxy - with validation
 app.get('/api/market/news', async (req: Request, res: Response) => {
   try {
     if (!ENV.FINNHUB_API_KEY) {
       return res.status(503).json(apiResponse.error('News service unavailable', 503));
     }
-    const { category = 'forex' } = req.query;
+    
+    // Validate input with Zod
+    const parsed = newsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json(apiResponse.error(
+        `Invalid parameters: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+        400
+      ));
+    }
+    
+    const { category } = parsed.data;
+    
+    // API key is server-side only - never exposed to client
     const response = await fetch(`https://finnhub.io/api/v1/news?category=${category}&token=${ENV.FINNHUB_API_KEY}`);
     if (!response.ok) throw new Error('Failed to fetch news');
     const data = await response.json();
@@ -515,14 +546,25 @@ app.get('/api/market/news', async (req: Request, res: Response) => {
   }
 });
 
-// 6. Twelve Data Quote Proxy
+// 6. Twelve Data Quote Proxy - with validation
 app.get('/api/market/quote', async (req: Request, res: Response) => {
   try {
     if (!ENV.TWELVEDATA_API_KEY) {
       return res.status(503).json(apiResponse.error('Quote service unavailable', 503));
     }
-    const { symbol } = req.query;
-    if (!symbol) return res.status(400).json(apiResponse.error('Symbol is required', 400));
+    
+    // Validate input with Zod
+    const parsed = quoteQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json(apiResponse.error(
+        `Invalid parameters: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+        400
+      ));
+    }
+    
+    const { symbol } = parsed.data;
+    
+    // API key is server-side only - never exposed to client
     const response = await fetch(`https://api.twelvedata.com/quote?symbol=${symbol}&apikey=${ENV.TWELVEDATA_API_KEY}`);
     if (!response.ok) throw new Error('Failed to fetch quote');
     const data = await response.json();
@@ -532,13 +574,25 @@ app.get('/api/market/quote', async (req: Request, res: Response) => {
   }
 });
 
-// 7. ForexRate Proxy
+// 7. ForexRate Proxy - with validation
 app.get('/api/market/forexrate', async (req: Request, res: Response) => {
   try {
     if (!ENV.FOREXRATE_API_KEY) {
       return res.status(503).json(apiResponse.error('ForexRate service unavailable', 503));
     }
-    const { base = 'USD' } = req.query;
+    
+    // Validate input with Zod
+    const parsed = forexRateQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json(apiResponse.error(
+        `Invalid parameters: ${parsed.error.errors.map(e => e.message).join(', ')}`,
+        400
+      ));
+    }
+    
+    const { base } = parsed.data;
+    
+    // API key is server-side only - never exposed to client
     const response = await fetch(`https://api.forexrateapi.com/v1/latest?api_key=${ENV.FOREXRATE_API_KEY}&base=${base}`);
     if (!response.ok) throw new Error('Failed to fetch forex rates');
     const data = await response.json();
@@ -581,8 +635,6 @@ function gracefulShutdown(signal: string): void {
   logger.info({ signal }, 'Shutdown signal received');
   
   clearInterval(priceSyncInterval);
-  
-  wss.clients.forEach(client => client.close());
   
   server.close(() => {
     logger.info('HTTP server closed');
