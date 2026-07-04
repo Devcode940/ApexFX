@@ -174,7 +174,6 @@ export interface HealthResponse {
   uptime: number;
   environment: string;
   services: {
-    websocket: number;
     twelveData: boolean;
     gemini: boolean;
     finnhub: boolean;

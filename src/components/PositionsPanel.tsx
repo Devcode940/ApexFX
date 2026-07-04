@@ -90,8 +90,9 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
   const getActiveSlPips = () => {
     if (useSltp) {
       const slParsed = parseFloat(customSl);
-      const activeSl = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal.sl;
-      if (activeSl > 0) {
+      const signalSl = activeSignal?.sl;
+      const activeSl = !isNaN(slParsed) && slParsed > 0 ? slParsed : signalSl;
+      if (activeSl !== undefined && activeSl > 0) {
         const multiplier = getPipMultiplier(selectedSymbol);
         const diff = Math.abs(currentPrice - activeSl);
         const calculatedPips = Math.round(diff * multiplier);
@@ -153,8 +154,8 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
       const slParsed = parseFloat(customSl);
       const tpParsed = parseFloat(customTp);
 
-      slValue = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal.sl;
-      tpValue = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : activeSignal.tp;
+      slValue = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal?.sl;
+      tpValue = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : activeSignal?.tp;
 
       // Simple validation sanity check
       if (type === 'BUY') {
@@ -187,8 +188,8 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
 
   // Pre-fill fields with signal suggestions
   const handleAutoFill = () => {
-    setCustomSl(activeSignal.sl.toString());
-    setCustomTp(activeSignal.tp.toString());
+    setCustomSl(activeSignal?.sl?.toString() ?? '');
+    setCustomTp(activeSignal?.tp?.toString() ?? '');
     setUseSltp(true);
     setErrorText('');
   };
@@ -238,7 +239,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
               <button
                 type="button"
                 onClick={handleAutoFill}
-                disabled={activeSignal.type === 'NEUTRAL'}
+                disabled={activeSignal?.type === 'NEUTRAL'}
                 className="w-full py-2 px-1.5 border border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 text-zinc-400 hover:text-white rounded text-[10px] font-mono tracking-tight uppercase transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
@@ -268,7 +269,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                   <span className="text-[9px] text-zinc-500 font-mono uppercase block mb-1">Stop Loss (SL)</span>
                   <input
                     type="text"
-                    placeholder={`e.g. ${activeSignal.sl}`}
+                    placeholder={`e.g. ${activeSignal?.sl ?? 'auto'}`}
                     value={customSl}
                     onChange={(e) => setCustomSl(e.target.value)}
                     className="w-full bg-zinc-950 text-xs font-mono border border-zinc-800 outline-none rounded p-1.5 text-zinc-200"
@@ -278,7 +279,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                   <span className="text-[9px] text-zinc-500 font-mono uppercase block mb-1">Take Profit (TP)</span>
                   <input
                     type="text"
-                    placeholder={`e.g. ${activeSignal.tp}`}
+                    placeholder={`e.g. ${activeSignal?.tp ?? 'auto'}`}
                     value={customTp}
                     onChange={(e) => setCustomTp(e.target.value)}
                     className="w-full bg-zinc-950 text-xs font-mono border border-zinc-800 outline-none rounded p-1.5 text-zinc-200"
@@ -728,7 +729,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                             }}
                             className={`px-1.5 py-0.5 rounded transition-all cursor-pointer font-bold ${
                               historyPageSize === size
-                                ? 'bg-zinc-855 bg-emerald-600/20 text-emerald-400 border border-emerald-900/30'
+                                ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-900/30'
                                 : 'text-zinc-500 hover:text-zinc-300'
                             }`}
                           >

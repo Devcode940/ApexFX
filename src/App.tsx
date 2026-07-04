@@ -86,7 +86,7 @@ function TradingTerminal() {
             className={`p-2 rounded-lg transition-all border cursor-pointer flex items-center justify-center ${
               theme === 'dark' 
                 ? 'bg-zinc-900 hover:bg-zinc-800 text-amber-400 border-zinc-800 hover:border-zinc-700 shadow-md' 
-                : 'bg-white hover:bg-zinc-100 text-indigo-600 border-zinc-200 hover:border-zinc-350 shadow-sm'
+                : 'bg-white hover:bg-zinc-100 text-indigo-600 border-zinc-200 hover:border-zinc-300 shadow-sm'
             }`}
             title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Session Theme`}
             id="theme_toggle_btn"

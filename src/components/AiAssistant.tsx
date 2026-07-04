@@ -56,14 +56,17 @@ export const AiAssistant: React.FC<AiAssistantProps> = () => {
 
   // Initialize with greeting message based on symbol
   useEffect(() => {
+    const signalType = activeSignal?.type ?? 'NEUTRAL';
+    const signalConfidence = activeSignal?.confidence ?? 50;
+    const signalPrice = activeSignal?.price ?? 1.0;
     setMessages([
       {
         sender: 'ai',
-        text: `Greetings! I am the **ApexFX AI Analyst**. I have fully scanned **${symbol}** on the **${timeframe}** timeframe. 📊\n\nMy core engine suggests a **${activeSignal.type}** consensus strategy with **${activeSignal.confidence}%** confidence at **${activeSignal.price}**.\n\nUse our **Expert Strategy Templates** below to run real-time confluences, Fibonacci levels, or risk calculations instantly, or ask any custom technical analysis questions!`,
+        text: `Greetings! I am the **ApexFX AI Analyst**. I have fully scanned **${symbol}** on the **${timeframe}** timeframe. 📊\n\nMy core engine suggests a **${signalType}** consensus strategy with **${signalConfidence}%** confidence at **${signalPrice}**.\n\nUse our **Expert Strategy Templates** below to run real-time confluences, Fibonacci levels, or risk calculations instantly, or ask any custom technical analysis questions!`,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
     ]);
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, activeSignal]);
 
   // Handle scrolling after new message
   useEffect(() => {
@@ -313,7 +316,11 @@ export const AiAssistant: React.FC<AiAssistantProps> = () => {
     }
 
     if (q.includes('stop loss') || q.includes('sl') || q.includes('tp') || q.includes('protect')) {
-      return `Evaluating protection brackets for **${symbol}**:\n\nBased on ATR volatility multipliers and our active signal metric, here is the suggested configuration:\n\n- **Order Type**: ${activeSignal.type}\n- **Stop Loss (SL)**: \`${activeSignal.sl}\` (${Math.abs(activeSignal.price - activeSignal.sl).toFixed(5)} offset units)\n- **Take Profit (TP)**: \`${activeSignal.tp}\` (${Math.abs(activeSignal.price - activeSignal.tp).toFixed(5)} offset units)\n\n*Rule of thumb*: For Long setups, place your Stop Loss right below the nearest 20-period Simple Moving Average (SMA).`;
+      const signalType = activeSignal?.type ?? 'NEUTRAL';
+      const signalSl = activeSignal?.sl ?? 0;
+      const signalTp = activeSignal?.tp ?? 0;
+      const signalPrice = activeSignal?.price ?? curPrice;
+      return `Evaluating protection brackets for **${symbol}**:\n\nBased on ATR volatility multipliers and our active signal metric, here is the suggested configuration:\n\n- **Order Type**: ${signalType}\n- **Stop Loss (SL)**: \`${signalSl}\` (${Math.abs(signalPrice - signalSl).toFixed(5)} offset units)\n- **Take Profit (TP)**: \`${signalTp}\` (${Math.abs(signalPrice - signalTp).toFixed(5)} offset units)\n\n*Rule of thumb*: For Long setups, place your Stop Loss right below the nearest 20-period Simple Moving Average (SMA).`;
     }
 
     if (q.includes('breakout') || q.includes('support') || q.includes('resistance')) {
@@ -325,8 +332,10 @@ export const AiAssistant: React.FC<AiAssistantProps> = () => {
       return `Analyzing Key Psychological Channels for **${symbol}** (${timeframe}):\n\n- **Major Resistance**: \`${res.toFixed(5)}\` (Local maximum of trailing 40 candles)\n- **Key Support**: \`${sup.toFixed(5)}\` (Local minimum of trailing 40 candles)\n\n*Strategic Outlook*: If price closes above resistance on higher volume, a bullish breakout is confirmed. Conversely, falling below support suggests rapid distribution toward macro levels.`;
     }
 
-    return `According to our indicator consensus for **${symbol}** on the **${timeframe}** chart, the trend direction points toward **${activeSignal.type}**.\n\nHere are the supporting indices:\n\n` +
-      activeSignal.rationale.map(r => `- ${r}`).join('\n') + 
+    const signalType = activeSignal?.type ?? 'NEUTRAL';
+    const rationale = activeSignal?.rationale ?? ['No active signal data available.'];
+    return `According to our indicator consensus for **${symbol}** on the **${timeframe}** chart, the trend direction points toward **${signalType}**.\n\nHere are the supporting indices:\n\n` +
+      rationale.map(r => `- ${r}`).join('\n') + 
       `\n\nLet me know if you would like me to detail moving average crossovers, calculate Fibonacci levels, or trace candlestick shapes!`;
   };
 

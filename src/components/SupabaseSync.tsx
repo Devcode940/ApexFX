@@ -108,7 +108,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           lots: pos.amount,
           stop_loss: pos.sl || null,
           take_profit: pos.tp || null,
-          timestamp: new Date(pos.time).getTime(),
+          timestamp: Date.now(),
           pips: 0,
           profit: pos.pnl
         }));
@@ -132,8 +132,8 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           lots: trade.amount,
           profit: trade.pnl,
           pips: 0,
-          open_time: new Date(trade.time).getTime() - 3600000, // approximate open time
-          close_time: new Date(trade.time).getTime()
+          open_time: Date.now() - 3600000, // approximate open time
+          close_time: Date.now()
         }));
 
         const { error: tradeErr } = await supabase
@@ -364,7 +364,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
                 <button
                   onClick={handlePullSync}
                   disabled={syncing}
-                  className="p-2.5 bg-zinc-800 hover:bg-zinc-750 hover:bg-zinc-700 text-zinc-100 font-semibold text-xs rounded-lg transition-colors flex flex-col items-center gap-1 cursor-pointer border border-zinc-750"
+                  className="p-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold text-xs rounded-lg transition-colors flex flex-col items-center gap-1 cursor-pointer border border-zinc-700"
                 >
                   <Check className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Pull from Cloud</span>

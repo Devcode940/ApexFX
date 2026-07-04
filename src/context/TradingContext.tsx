@@ -222,8 +222,11 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     const fetchQuote = async () => {
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
         const symbolFormat = selectedSymbol.slice(0, 3) + '/' + selectedSymbol.slice(3);
-        const response = await fetch(`/api/market/quote?symbol=${symbolFormat}`);
+        const response = await fetch(`/api/market/quote?symbol=${symbolFormat}`, { signal: controller.signal });
+        clearTimeout(timeout);
         const data = await response.json();
         if (response.ok && data.price) {
           setLiveQuote(data);
@@ -239,29 +242,23 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => clearInterval(sub);
   }, [selectedSymbol]);
 
-  // --- Fetch real exchange rates from Frankfurter/ForexRate API on mount ---
+  // --- Fetch real exchange rates from multi-API service on mount ---
+  // Uses Frankfurter as primary, with automatic fallback: Frankfurter -> Twelve Data -> ForexRate -> Base Prices
   useEffect(() => {
     const fetchRealRates = async () => {
       try {
-        // First try the user-provided ForexRate API
-        const frResponse = await fetch('/api/market/forexrate');
-        const frData = await frResponse.json();
-        let rates = null;
-        
-        if (frResponse.ok && frData.rates) {
-          rates = frData.rates;
-        } else {
-          // Fallback to Frankfurter
-          const response = await fetch('/api/forex');
-          const data = await response.json();
-          if (data.success && data.rates) rates = data.rates;
-        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const response = await fetch('/api/forex', { signal: controller.signal });
+        clearTimeout(timeout);
+        const data = await response.json();
+        const rates = data.success && data.rates ? data.rates : null;
 
         if (rates) {
           setWatchlistItems((prevItems) => {
             return prevItems.map((item) => {
               const realPrice = rates[item.symbol];
-              if (realPrice) {
+              if (realPrice !== null && realPrice !== undefined) {
                 return {
                   ...item,
                   price: realPrice,
@@ -270,9 +267,11 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
               return item;
             });
           });
+          
+          console.log(`[Forex] Successfully loaded rates from ${data.source || 'unknown source'}`);
         }
       } catch (err) {
-        console.warn('Real forex rates API not available or failed. Falling back to high-fidelity simulated prices.', err);
+        console.warn('[Forex] All external APIs failed, using base prices:', err);
       }
     };
     fetchRealRates();
@@ -337,7 +336,10 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setWsConnected(true);
       pollingInterval = setInterval(async () => {
         try {
-          const response = await fetch('/api/market/prices');
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+          const response = await fetch('/api/market/prices', { signal: controller.signal });
+          clearTimeout(timeout);
           const data = await response.json();
           if (response.ok && data.success && data.rates) {
             handlePricesUpdate(data.rates);
@@ -393,7 +395,10 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     let active = true;
     async function fetchHistory() {
       try {
-        const response = await fetch(`/api/market/history?symbol=${selectedSymbol}&timeframe=${selectedTimeframe}`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const response = await fetch(`/api/market/history?symbol=${selectedSymbol}&timeframe=${selectedTimeframe}`, { signal: controller.signal });
+        clearTimeout(timeout);
         const result = await response.json();
         if (active) {
           if (result.success && Array.isArray(result.data) && result.data.length > 0) {

@@ -480,7 +480,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
       };
     }
     // 6. MORNING STAR (Bullish 3-candle pattern)
-    else if (pp.close < pp.open && (Math.abs(p.close - p.open) / (p.high - p.low || 1) < 0.25) && isBullish && c.close > (pp.open + pp.close) / 2) {
+    else if (pp.close < pp.open && p.high - p.low > 0 && (Math.abs(p.close - p.open) / (p.high - p.low) < 0.25) && isBullish && c.close > (pp.open + pp.close) / 2) {
       pat = {
         id: `morning_star_${i}`,
         name: 'Morning Star',
@@ -491,7 +491,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
       };
     }
     // 7. EVENING STAR (Bearish 3-candle pattern)
-    else if (pp.close > pp.open && (Math.abs(p.close - p.open) / (p.high - p.low || 1) < 0.25) && isBearish && c.close < (pp.open + pp.close) / 2) {
+    else if (pp.close > pp.open && p.high - p.low > 0 && (Math.abs(p.close - p.open) / (p.high - p.low) < 0.25) && isBearish && c.close < (pp.open + pp.close) / 2) {
       pat = {
         id: `evening_star_${i}`,
         name: 'Evening Star',

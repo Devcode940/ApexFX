@@ -962,7 +962,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
 
           <button
             onClick={handleTakeSnapshot}
-            className={`p-1.5 ${theme === 'dark' ? 'bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 hover:text-emerald-200 border-emerald-900/60 hover:border-emerald-700' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 hover:text-emerald-750 border-emerald-200 hover:border-emerald-300'} rounded border transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold`}
+            className={`p-1.5 ${theme === 'dark' ? 'bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 hover:text-emerald-200 border-emerald-900/60 hover:border-emerald-700' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 hover:text-emerald-700 border-emerald-200 hover:border-emerald-300'} rounded border transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold`}
             title="Take a snapshot of this chart and analyze with Co-Pilot"
           >
             <Camera className="w-3.5 h-3.5" />
