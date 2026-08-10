@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { TradePosition, TradingSignal, ClosedTrade } from '../types';
-import { DollarSign, Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, History, Calculator, ChevronDown, ChevronUp } from 'lucide-react';
+import { DollarSign, Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, History, Calculator, ChevronDown, ChevronUp, Download, FileSpreadsheet } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { formatPrice } from '../utils/forexData';
 
 import { useTrading } from '../context/TradingContext';
+
+import { PerformanceDashboard, formatDuration } from './PerformanceDashboard';
 
 interface PositionsPanelProps {}
 
@@ -19,7 +21,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
     handleOpenPosition: onOpenPosition,
     handleClosePosition: onClosePosition,
   } = useTrading();
-  const [activeTab, setActiveTab] = useState<'positions' | 'history'>('positions');
+  const [activeTab, setActiveTab] = useState<'positions' | 'history' | 'analytics'>('positions');
   const [amount, setAmount] = useState<number>(0.1); // lot size
   const [useSltp, setUseSltp] = useState<boolean>(true);
   const [customSl, setCustomSl] = useState<string>('');
@@ -90,9 +92,8 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
   const getActiveSlPips = () => {
     if (useSltp) {
       const slParsed = parseFloat(customSl);
-      const signalSl = activeSignal?.sl;
-      const activeSl = !isNaN(slParsed) && slParsed > 0 ? slParsed : signalSl;
-      if (activeSl !== undefined && activeSl > 0) {
+      const activeSl = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal.sl;
+      if (activeSl > 0) {
         const multiplier = getPipMultiplier(selectedSymbol);
         const diff = Math.abs(currentPrice - activeSl);
         const calculatedPips = Math.round(diff * multiplier);
@@ -154,8 +155,8 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
       const slParsed = parseFloat(customSl);
       const tpParsed = parseFloat(customTp);
 
-      slValue = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal?.sl;
-      tpValue = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : activeSignal?.tp;
+      slValue = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal.sl;
+      tpValue = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : activeSignal.tp;
 
       // Simple validation sanity check
       if (type === 'BUY') {
@@ -188,10 +189,55 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
 
   // Pre-fill fields with signal suggestions
   const handleAutoFill = () => {
-    setCustomSl(activeSignal?.sl?.toString() ?? '');
-    setCustomTp(activeSignal?.tp?.toString() ?? '');
+    setCustomSl(activeSignal.sl.toString());
+    setCustomTp(activeSignal.tp.toString());
     setUseSltp(true);
     setErrorText('');
+  };
+
+  // --- Export Closed Trades History to CSV ---
+  const handleExportCSV = () => {
+    if (closedTrades.length === 0) return;
+
+    const headers = [
+      'Trade ID',
+      'Symbol',
+      'Type',
+      'Lot Size',
+      'Entry Price',
+      'Exit Price',
+      'Realized PnL ($)',
+      'Close Reason',
+      'Execution Time'
+    ];
+
+    const rows = closedTrades.map((trade) => [
+      trade.id,
+      trade.symbol,
+      trade.type,
+      trade.amount.toFixed(2),
+      formatPrice(trade.entryPrice, trade.symbol),
+      formatPrice(trade.exitPrice, trade.symbol),
+      trade.pnl.toFixed(2),
+      trade.closeReason || 'Manual',
+      `"${trade.time}"`
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map((row) => row.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().slice(0, 10);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `apexfx_trade_history_${timestamp}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const totalPnL = positions.reduce((acc, pos) => acc + pos.pnl, 0);
@@ -239,7 +285,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
               <button
                 type="button"
                 onClick={handleAutoFill}
-                disabled={activeSignal?.type === 'NEUTRAL'}
+                disabled={activeSignal.type === 'NEUTRAL'}
                 className="w-full py-2 px-1.5 border border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 text-zinc-400 hover:text-white rounded text-[10px] font-mono tracking-tight uppercase transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
@@ -269,7 +315,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                   <span className="text-[9px] text-zinc-500 font-mono uppercase block mb-1">Stop Loss (SL)</span>
                   <input
                     type="text"
-                    placeholder={`e.g. ${activeSignal?.sl ?? 'auto'}`}
+                    placeholder={`e.g. ${activeSignal.sl}`}
                     value={customSl}
                     onChange={(e) => setCustomSl(e.target.value)}
                     className="w-full bg-zinc-950 text-xs font-mono border border-zinc-800 outline-none rounded p-1.5 text-zinc-200"
@@ -279,7 +325,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                   <span className="text-[9px] text-zinc-500 font-mono uppercase block mb-1">Take Profit (TP)</span>
                   <input
                     type="text"
-                    placeholder={`e.g. ${activeSignal?.tp ?? 'auto'}`}
+                    placeholder={`e.g. ${activeSignal.tp}`}
                     value={customTp}
                     onChange={(e) => setCustomTp(e.target.value)}
                     className="w-full bg-zinc-950 text-xs font-mono border border-zinc-800 outline-none rounded p-1.5 text-zinc-200"
@@ -453,7 +499,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
         <div className="flex border border-zinc-800/80 p-0.5 bg-zinc-950/45 rounded-lg">
           <button
             onClick={() => setActiveTab('positions')}
-            className={`flex-1 py-1 text-[11px] font-mono font-bold uppercase rounded transition-all cursor-pointer ${
+            className={`flex-1 py-1 text-[10px] font-mono font-bold uppercase rounded transition-all cursor-pointer ${
               activeTab === 'positions'
                 ? 'bg-zinc-800 text-zinc-100 shadow-sm shadow-black/20'
                 : 'text-zinc-500 hover:text-zinc-300'
@@ -463,7 +509,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
           </button>
           <button
             onClick={() => setActiveTab('history')}
-            className={`flex-1 py-1 text-[11px] font-mono font-bold uppercase rounded transition-all cursor-pointer ${
+            className={`flex-1 py-1 text-[10px] font-mono font-bold uppercase rounded transition-all cursor-pointer ${
               activeTab === 'history'
                 ? 'bg-zinc-800 text-zinc-100 shadow-sm shadow-black/20'
                 : 'text-zinc-500 hover:text-zinc-300'
@@ -471,9 +517,23 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
           >
             History ({closedTrades.length})
           </button>
+          <button
+            onClick={() => setActiveTab('analytics')}
+            className={`flex-1 py-1 text-[10px] font-mono font-bold uppercase rounded transition-all cursor-pointer flex items-center justify-center gap-1 ${
+              activeTab === 'analytics'
+                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-950/40'
+                : 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/30'
+            }`}
+          >
+            <span>Analytics</span>
+          </button>
         </div>
 
-        {activeTab === 'positions' ? (
+        {activeTab === 'analytics' ? (
+          <div className="space-y-4">
+            <PerformanceDashboard />
+          </div>
+        ) : activeTab === 'positions' ? (
           <>
             {/* Positions list ledger */}
             <div className="space-y-2">
@@ -641,14 +701,29 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                 <History className="w-3.5 h-3.5 text-zinc-500" />
                 <span>Closed Trades Ledger</span>
               </div>
-              {closedTrades.length > 0 && onClearHistory && (
-                <button
-                  onClick={onClearHistory}
-                  className="text-[10px] text-zinc-500 hover:text-zinc-300 uppercase tracking-tight font-bold cursor-pointer transition-all"
-                >
-                  Clear Logs
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {closedTrades.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleExportCSV}
+                    className="text-[10px] text-emerald-400 hover:text-emerald-300 uppercase tracking-tight font-bold cursor-pointer transition-all flex items-center gap-1 bg-emerald-950/40 hover:bg-emerald-900/50 px-2 py-0.5 rounded border border-emerald-900/50 shadow-sm"
+                    title="Export trade history to CSV file"
+                    id="export_csv_btn"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>Export CSV</span>
+                  </button>
+                )}
+                {closedTrades.length > 0 && onClearHistory && (
+                  <button
+                    type="button"
+                    onClick={onClearHistory}
+                    className="text-[10px] text-zinc-500 hover:text-zinc-300 uppercase tracking-tight font-bold cursor-pointer transition-all"
+                  >
+                    Clear Logs
+                  </button>
+                )}
+              </div>
             </div>
 
             {closedTrades.length === 0 ? (
@@ -729,7 +804,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                             }}
                             className={`px-1.5 py-0.5 rounded transition-all cursor-pointer font-bold ${
                               historyPageSize === size
-                                ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-900/30'
+                                ? 'bg-zinc-855 bg-emerald-600/20 text-emerald-400 border border-emerald-900/30'
                                 : 'text-zinc-500 hover:text-zinc-300'
                             }`}
                           >

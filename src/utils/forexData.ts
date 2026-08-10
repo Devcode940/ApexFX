@@ -1,8 +1,4 @@
 import { Candlestick, Timeframe, WatchlistItem, TechnicalIndicatorsState, Pattern, TradingSignal, NewsItem } from '../types';
-import { PAIRS_CONFIG, TIME_CONFIG as TIME_CONFIG_FULL } from '../constants/config';
-
-// Re-export PAIRS_CONFIG for backward compatibility
-export { PAIRS_CONFIG };
 
 // Pseudo-random generator for stable data
 export function createRandom(seed: string) {
@@ -16,6 +12,17 @@ export function createRandom(seed: string) {
   };
 }
 
+export const PAIRS_CONFIG: Record<string, { name: string; basePrice: number; pipDecimal: number; spreadPips: number }> = {
+  'EURUSD': { name: 'EUR / USD', basePrice: 1.08520, pipDecimal: 4, spreadPips: 1.2 },
+  'GBPUSD': { name: 'GBP / USD', basePrice: 1.27150, pipDecimal: 4, spreadPips: 1.6 },
+  'USDJPY': { name: 'USD / JPY', basePrice: 155.350, pipDecimal: 2, spreadPips: 1.4 },
+  'AUDUSD': { name: 'AUD / USD', basePrice: 0.66450, pipDecimal: 4, spreadPips: 1.5 },
+  'USDCAD': { name: 'USD / CAD', basePrice: 1.36780, pipDecimal: 4, spreadPips: 1.8 },
+  'GBPJPY': { name: 'GBP / JPY', basePrice: 198.150, pipDecimal: 2, spreadPips: 2.3 },
+  'XAUUSD': { name: 'Gold / USD', basePrice: 2325.40, pipDecimal: 2, spreadPips: 2.5 },
+  'XAGUSD': { name: 'Silver / USD', basePrice: 29.350, pipDecimal: 3, spreadPips: 2.0 },
+};
+
 export function getDecimalCount(symbol: string): number {
   const config = PAIRS_CONFIG[symbol];
   if (config) return config.pipDecimal + 1;
@@ -28,8 +35,14 @@ export function formatPrice(price: number, symbol: string): string {
   return price.toFixed(decimals);
 }
 
-// Re-export TIME_CONFIG for backward compatibility
-export const TIME_CONFIG: Record<Timeframe, { label: string; offsetSec: number }> = TIME_CONFIG_FULL;
+export const TIME_CONFIG: Record<Timeframe, { label: string; offsetSec: number }> = {
+  '1m': { label: '1 Minute', offsetSec: 60 },
+  '5m': { label: '5 Minutes', offsetSec: 300 },
+  '15m': { label: '15 Minutes', offsetSec: 900 },
+  '1H': { label: '1 Hour', offsetSec: 3600 },
+  '4H': { label: '4 Hours', offsetSec: 14400 },
+  'D': { label: '1 Day', offsetSec: 86400 },
+};
 
 // Generates starting dataset for pairs
 export function generateHistoricalData(symbol: string, timeframe: Timeframe, count = 180): Candlestick[] {
@@ -99,30 +112,23 @@ export function computeSMA(data: Candlestick[], period = 20): (number | null)[] 
 }
 
 export function computeEMA(data: Candlestick[], period = 50): (number | null)[] {
-  if (data.length === 0) return [];
+  const ema: (number | null)[] = [];
+  if (data.length === 0) return ema;
 
   const k = 2 / (period + 1);
-  const ema: (number | null)[] = [];
-
-  if (data.length <= period) {
-    return Array(data.length).fill(null);
-  }
-
-  // Use SMA for the first period, then switch to EMA
-  const initialSma = data.slice(0, period).reduce((sum, d) => sum + d.close, 0) / period;
-  let prevEma = initialSma;
-
-  for (let i = 0; i < period; i++) {
-    ema.push(null);
-  }
-
+  let prevEma = data[0].close;
   ema.push(prevEma);
 
-  for (let i = period + 1; i < data.length; i++) {
-    prevEma = data[i].close * k + prevEma * (1 - k);
-    ema.push(prevEma);
+  for (let i = 1; i < data.length; i++) {
+    const nextEma = data[i].close * k + prevEma * (1 - k);
+    ema.push(nextEma);
+    prevEma = nextEma;
   }
 
+  // Nullify initial ones to represent lack of solid EMA starting points, or just return them
+  for (let i = 0; i < Math.min(data.length, Math.floor(period / 3)); i++) {
+    ema[i] = null;
+  }
   return ema;
 }
 
@@ -480,7 +486,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
       };
     }
     // 6. MORNING STAR (Bullish 3-candle pattern)
-    else if (pp.close < pp.open && p.high - p.low > 0 && (Math.abs(p.close - p.open) / (p.high - p.low) < 0.25) && isBullish && c.close > (pp.open + pp.close) / 2) {
+    else if (pp.close < pp.open && (Math.abs(p.close - p.open) / (p.high - p.low || 1) < 0.25) && isBullish && c.close > (pp.open + pp.close) / 2) {
       pat = {
         id: `morning_star_${i}`,
         name: 'Morning Star',
@@ -491,7 +497,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
       };
     }
     // 7. EVENING STAR (Bearish 3-candle pattern)
-    else if (pp.close > pp.open && p.high - p.low > 0 && (Math.abs(p.close - p.open) / (p.high - p.low) < 0.25) && isBearish && c.close < (pp.open + pp.close) / 2) {
+    else if (pp.close > pp.open && (Math.abs(p.close - p.open) / (p.high - p.low || 1) < 0.25) && isBearish && c.close < (pp.open + pp.close) / 2) {
       pat = {
         id: `evening_star_${i}`,
         name: 'Evening Star',
@@ -643,8 +649,8 @@ export function generateSignal(
   const latestRsi = rsi[rsi.length - 1];
   const latestMacdHist = macdData.histogram[macdData.histogram.length - 1];
   const latestMacdLine = macdData.macd[macdData.macd.length - 1];
-  const latestBbUpper = bb.upper[bb.upper.length - 1];
-  const latestBbLower = bb.lower[bb.lower.length - 1];
+  const latestMacdBbUpper = bb.upper[bb.upper.length - 1];
+  const latestMacdBbLower = bb.lower[bb.lower.length - 1];
 
   // 1. Moving Averages crossover
   if (latestSma && latestEma) {
@@ -675,16 +681,16 @@ export function generateSignal(
   }
 
   // 3. Bollinger Bands channel position
-  if (latestBbUpper && latestBbLower) {
-    const channelSize = latestBbUpper - latestBbLower;
-    const positionPct = (currentPrice - latestBbLower) / (channelSize || 1);
+  if (latestMacdBbUpper && latestMacdBbLower) {
+    const channelSize = latestMacdBbUpper - latestMacdBbLower;
+    const positionPct = (currentPrice - latestMacdBbLower) / (channelSize || 1);
     
     if (positionPct < 0.1) {
       buyScore += 15;
-      rationale.push(`Price is pressing against the Lower Bollinger Band context (${latestBbLower.toFixed(4)}). Historically a high-probability zone for immediate buyback reactions.`);
+      rationale.push(`Price is pressing against the Lower Bollinger Band context (${latestMacdBbLower.toFixed(4)}). Historically a high-probability zone for immediate buyback reactions.`);
     } else if (positionPct > 0.9) {
       buyScore -= 15;
-      rationale.push(`Price has broken outside the Upper Bollinger Band (${latestBbUpper.toFixed(4)}). Strong rejection risks are elevated; shorting candidates have increased.`);
+      rationale.push(`Price has broken outside the Upper Bollinger Band (${latestMacdBbUpper.toFixed(4)}). Strong rejection risks are elevated; shorting candidates have increased.`);
     }
   }
 
@@ -735,13 +741,18 @@ export function generateSignal(
   }
 
   // Setup sensible dynamic SL / TP based on instrument pip steps
+  const isJPY = symbol.includes('JPY');
+  let pipMultiplier = 10000;
   let atrEquivalent = 0.0025; // simplified ATR
 
   if (symbol === 'XAUUSD') {
+    pipMultiplier = 100;
     atrEquivalent = 8.50;
   } else if (symbol === 'XAGUSD') {
+    pipMultiplier = 1000;
     atrEquivalent = 0.25;
-  } else if (symbol.includes('JPY')) {
+  } else if (isJPY) {
+    pipMultiplier = 100;
     atrEquivalent = 0.35;
   }
   let tp = currentPrice;
@@ -791,6 +802,7 @@ export function generateDefaultWatchlist(): WatchlistItem[] {
 // Simulate a ticking price update for watchlist and active chart
 export function simulatePriceTick(item: WatchlistItem): WatchlistItem {
   const config = PAIRS_CONFIG[item.symbol] || { pipDecimal: 4 };
+  const tickMultiplier = item.symbol.includes('JPY') ? 0.015 : 0.00015;
   const changePercent = (Math.random() - 0.5) * 0.15; // small ticks
   const diff = item.price * changePercent * 0.01;
 

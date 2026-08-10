@@ -2,11 +2,8 @@
   "version": 2,
   "builds": [
     {
-      "src": "server.ts",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["src/**"]
-      }
+      "src": "api/index.ts",
+      "use": "@vercel/node"
     },
     {
       "src": "package.json",
@@ -19,32 +16,15 @@
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "server.ts"
-    },
-    {
-      "src": "/health",
-      "dest": "server.ts"
+      "dest": "api/index.ts"
     },
     {
       "src": "/assets/(.*)",
-      "headers": {
-        "Cache-Control": "public, max-age=31536000, immutable"
-      },
       "dest": "/assets/$1"
     },
     {
       "src": "/(.*)",
       "dest": "/index.html"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "X-XSS-Protection", "value": "1; mode=block" }
-      ]
     }
   ]
 }

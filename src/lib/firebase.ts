@@ -1,10 +1,11 @@
 /// <reference types="vite/client" />
-import { initializeApp, getApps } from 'firebase/app';
+import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
 
-// Firebase configuration from environment variables
+// Your web app's Firebase configuration will be injected by AI Studio
+// The firebase-applet-config.json variables are automatically exposed as Vite env vars
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -14,15 +15,7 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-const isFirebaseConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
-
-let db: ReturnType<typeof getFirestore> | undefined;
-let auth: ReturnType<typeof getAuth> | undefined;
-
-if (isFirebaseConfigured && getApps().length === 0) {
-  const app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
-  auth = getAuth(app);
-}
-
-export { db, auth, isFirebaseConfigured };
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app);
+export const auth = getAuth(app);

@@ -9,18 +9,19 @@ import {
   TradingSignal 
 } from '../types';
 import {
+  generateDefaultWatchlist,
+  generateHistoricalData,
+  simulatePriceTick,
   detectPatterns,
   generateSignal,
   PAIRS_CONFIG,
   calculateVolatilityDetails
 } from '../utils/forexData';
 
-const CONTRACT_SIZE = 100000;
-
 interface TradingContextType {
   // Mobile / Navigation Tabs
-  mobileTab: 'chart' | 'watchlist' | 'signals' | 'trader' | 'analysis';
-  setMobileTab: React.Dispatch<React.SetStateAction<'chart' | 'watchlist' | 'signals' | 'trader' | 'analysis'>>;
+  mobileTab: 'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis';
+  setMobileTab: React.Dispatch<React.SetStateAction<'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis'>>;
   leftSidebarOpen: boolean;
   setLeftSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
   rightSidebarOpen: boolean;
@@ -81,7 +82,7 @@ const TradingContext = createContext<TradingContextType | undefined>(undefined);
 
 export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Navigation for tabbed sidebar on mobile
-  const [mobileTab, setMobileTab] = useState<'chart' | 'watchlist' | 'signals' | 'trader' | 'analysis'>('chart');
+  const [mobileTab, setMobileTab] = useState<'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis'>('chart');
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [isPending, startTransition] = useTransition();
@@ -103,17 +104,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [selectedSymbol, setSelectedSymbol] = useState<string>('EURUSD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1H');
   const [chartData, setChartData] = useState<Record<string, Record<string, any[]>>>({});
-  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => 
-    Object.keys(PAIRS_CONFIG).map(symbol => ({
-      symbol,
-      name: PAIRS_CONFIG[symbol].name,
-      price: PAIRS_CONFIG[symbol].basePrice,
-      change: 0,
-      high: PAIRS_CONFIG[symbol].basePrice,
-      low: PAIRS_CONFIG[symbol].basePrice,
-      spread: PAIRS_CONFIG[symbol].spreadPips,
-    }))
-  );
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => generateDefaultWatchlist());
   const [indicators, setIndicators] = useState<TechnicalIndicatorsState>(() => {
     const cached = localStorage.getItem('forexinsight_preferred_indicators');
     if (cached) {
@@ -130,7 +121,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
           };
         }
       } catch (e) {
-        // Use default indicators on parse error
+        console.error('Failed to parse cached indicators', e);
       }
     }
     return {
@@ -166,7 +157,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAiSnapshot(null);
   }, []);
 
-  // Connection state - now API-only (no WebSocket)
+  // WebSocket connection state
   const [wsConnected, setWsConnected] = useState<boolean>(false);
 
   // Paper Position Simulator (Read from LocalStorage or empty)
@@ -182,17 +173,132 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return [];
   });
 
-  // Closed trades history (Read from LocalStorage or empty)
+  // Closed trades history (Read from LocalStorage or seed defaults)
   const [closedTrades, setClosedTrades] = useState<ClosedTrade[]>(() => {
     const cached = localStorage.getItem('forexinsight_closed_trades');
     if (cached) {
       try {
-        return JSON.parse(cached);
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch (e) {
-        return [];
+        // Fallback to default
       }
     }
-    return [];
+    const now = Date.now();
+    return [
+      {
+        id: 'seed_trade_1',
+        symbol: 'EURUSD',
+        type: 'BUY',
+        entryPrice: 1.0820,
+        exitPrice: 1.0865,
+        amount: 0.5,
+        pnl: 225.00,
+        time: '11:45:12',
+        closeReason: 'TP Hit',
+        openedAt: now - 3600000 * 26,
+        closedAt: now - 3600000 * 24,
+        durationMs: 3600000 * 2, // 2 hours
+      },
+      {
+        id: 'seed_trade_2',
+        symbol: 'GBPUSD',
+        type: 'BUY',
+        entryPrice: 1.2640,
+        exitPrice: 1.2695,
+        amount: 0.3,
+        pnl: 165.00,
+        time: '09:20:00',
+        closeReason: 'TP Hit',
+        openedAt: now - 3600000 * 20,
+        closedAt: now - 3600000 * 18.5,
+        durationMs: 3600000 * 1.5, // 1.5 hours
+      },
+      {
+        id: 'seed_trade_3',
+        symbol: 'USDJPY',
+        type: 'SELL',
+        entryPrice: 154.80,
+        exitPrice: 155.15,
+        amount: 0.4,
+        pnl: -91.00,
+        time: '08:15:30',
+        closeReason: 'SL Hit',
+        openedAt: now - 3600000 * 16,
+        closedAt: now - 3600000 * 15.2,
+        durationMs: 3600000 * 0.8, // 48 mins
+      },
+      {
+        id: 'seed_trade_4',
+        symbol: 'XAUUSD',
+        type: 'BUY',
+        entryPrice: 2380.50,
+        exitPrice: 2394.20,
+        amount: 0.2,
+        pnl: 274.00,
+        time: '14:02:10',
+        closeReason: 'TP Hit',
+        openedAt: now - 3600000 * 12,
+        closedAt: now - 3600000 * 11.2,
+        durationMs: 3600000 * 0.8, // 48 mins
+      },
+      {
+        id: 'seed_trade_5',
+        symbol: 'EURUSD',
+        type: 'SELL',
+        entryPrice: 1.0870,
+        exitPrice: 1.0840,
+        amount: 0.5,
+        pnl: 150.00,
+        time: '16:30:00',
+        closeReason: 'Manual',
+        openedAt: now - 3600000 * 8,
+        closedAt: now - 3600000 * 7.1,
+        durationMs: 3600000 * 0.9, // 54 mins
+      },
+      {
+        id: 'seed_trade_6',
+        symbol: 'AUDUSD',
+        type: 'BUY',
+        entryPrice: 0.6520,
+        exitPrice: 0.6505,
+        amount: 0.6,
+        pnl: -90.00,
+        time: '17:10:45',
+        closeReason: 'SL Hit',
+        openedAt: now - 3600000 * 6,
+        closedAt: now - 3600000 * 5.5,
+        durationMs: 3600000 * 0.5, // 30 mins
+      },
+      {
+        id: 'seed_trade_7',
+        symbol: 'GBPUSD',
+        type: 'SELL',
+        entryPrice: 1.2710,
+        exitPrice: 1.2660,
+        amount: 0.4,
+        pnl: 200.00,
+        time: '19:05:00',
+        closeReason: 'TP Hit',
+        openedAt: now - 3600000 * 4,
+        closedAt: now - 3600000 * 2.8,
+        durationMs: 3600000 * 1.2, // 1 hour 12 mins
+      },
+      {
+        id: 'seed_trade_8',
+        symbol: 'USDCHF',
+        type: 'BUY',
+        entryPrice: 0.8950,
+        exitPrice: 0.8985,
+        amount: 0.3,
+        pnl: 105.00,
+        time: '21:15:20',
+        closeReason: 'Manual',
+        openedAt: now - 3600000 * 2,
+        closedAt: now - 3600000 * 1.2,
+        durationMs: 3600000 * 0.8, // 48 mins
+      }
+    ];
   });
 
   // Watchlist Tick Visual Flashes state
@@ -222,11 +328,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     const fetchQuote = async () => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
         const symbolFormat = selectedSymbol.slice(0, 3) + '/' + selectedSymbol.slice(3);
-        const response = await fetch(`/api/market/quote?symbol=${symbolFormat}`, { signal: controller.signal });
-        clearTimeout(timeout);
+        const response = await fetch(`/api/market/quote?symbol=${symbolFormat}`);
         const data = await response.json();
         if (response.ok && data.price) {
           setLiveQuote(data);
@@ -242,23 +345,29 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => clearInterval(sub);
   }, [selectedSymbol]);
 
-  // --- Fetch real exchange rates from multi-API service on mount ---
-  // Uses Frankfurter as primary, with automatic fallback: Frankfurter -> Twelve Data -> ForexRate -> Base Prices
+  // --- Fetch real exchange rates from Frankfurter/ForexRate API on mount ---
   useEffect(() => {
     const fetchRealRates = async () => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        const response = await fetch('/api/forex', { signal: controller.signal });
-        clearTimeout(timeout);
-        const data = await response.json();
-        const rates = data.success && data.rates ? data.rates : null;
+        // First try the user-provided ForexRate API
+        const frResponse = await fetch('/api/market/forexrate');
+        const frData = await frResponse.json();
+        let rates = null;
+        
+        if (frResponse.ok && frData.rates) {
+          rates = frData.rates;
+        } else {
+          // Fallback to Frankfurter
+          const response = await fetch('/api/forex');
+          const data = await response.json();
+          if (data.success && data.rates) rates = data.rates;
+        }
 
         if (rates) {
           setWatchlistItems((prevItems) => {
             return prevItems.map((item) => {
               const realPrice = rates[item.symbol];
-              if (realPrice !== null && realPrice !== undefined) {
+              if (realPrice) {
                 return {
                   ...item,
                   price: realPrice,
@@ -267,18 +376,18 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
               return item;
             });
           });
-          
-          console.log(`[Forex] Successfully loaded rates from ${data.source || 'unknown source'}`);
         }
       } catch (err) {
-        console.warn('[Forex] All external APIs failed, using base prices:', err);
+        console.warn('Real forex rates API not available or failed. Falling back to high-fidelity simulated prices.', err);
       }
     };
     fetchRealRates();
   }, []);
 
-  // --- Real-time price updates via API polling only (no WebSocket) ---
+  // --- Real-time price updates via WebSocket streaming with Polling Fallback ---
   useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: any = null;
     let pollingInterval: any = null;
 
     const handlePricesUpdate = (rates: Record<string, any>) => {
@@ -332,39 +441,76 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const startPolling = () => {
       if (pollingInterval) return;
-      console.log('[API Polling] Starting background HTTP polling for market rates...');
-      setWsConnected(true);
+      console.log('[Fallback Polling] Starting background HTTP polling for market rates...');
       pollingInterval = setInterval(async () => {
         try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 5000);
-          const response = await fetch('/api/market/prices', { signal: controller.signal });
-          clearTimeout(timeout);
+          const response = await fetch('/api/market/prices');
           const data = await response.json();
           if (response.ok && data.success && data.rates) {
             handlePricesUpdate(data.rates);
           }
         } catch (e) {
           // Silent catch to prevent console error spam
-          setWsConnected(false);
         }
-      }, 3000);
+      }, 2500);
     };
 
     const stopPolling = () => {
       if (pollingInterval) {
         clearInterval(pollingInterval);
         pollingInterval = null;
-        console.log('[API Polling] Stopped background HTTP polling');
-        setWsConnected(false);
+        console.log('[Fallback Polling] Stopped background HTTP polling (WebSocket active)');
       }
     };
 
-    // Start polling immediately
+    const connect = () => {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          setWsConnected(true);
+          stopPolling();
+          console.log('[WebSocket] Real-time rates stream connected');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'INITIAL_RATES' || data.type === 'PRICE_UPDATE') {
+              handlePricesUpdate(data.rates);
+            }
+          } catch (e) {
+            console.warn('[WebSocket] Message parsing error:', e);
+          }
+        };
+
+        ws.onclose = () => {
+          setWsConnected(false);
+          startPolling();
+          reconnectTimeout = setTimeout(connect, 5000);
+        };
+
+        ws.onerror = (err) => {
+          console.warn('[WebSocket] Connection failed. Fallback polling is keeping the prices live.', err);
+          ws?.close();
+        };
+      } catch (err) {
+        console.warn('[WebSocket] Setup failed:', err);
+        startPolling();
+        reconnectTimeout = setTimeout(connect, 5000);
+      }
+    };
+
+    connect();
+    // Start polling immediately so that we have live prices even if WebSocket is blocked or connecting
     startPolling();
 
     return () => {
-      stopPolling();
+      if (ws) ws.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (pollingInterval) clearInterval(pollingInterval);
     };
   }, []);
 
@@ -395,10 +541,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     let active = true;
     async function fetchHistory() {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
-        const response = await fetch(`/api/market/history?symbol=${selectedSymbol}&timeframe=${selectedTimeframe}`, { signal: controller.signal });
-        clearTimeout(timeout);
+        const response = await fetch(`/api/market/history?symbol=${selectedSymbol}&timeframe=${selectedTimeframe}`);
         const result = await response.json();
         if (active) {
           if (result.success && Array.isArray(result.data) && result.data.length > 0) {
@@ -410,22 +553,26 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
               }
             }));
           } else {
+            console.warn('Real history failed or empty. Falling back to high-fidelity simulated chart data.');
+            const fallbackHistory = generateHistoricalData(selectedSymbol, selectedTimeframe, 200);
             setChartData((prev) => ({
               ...prev,
               [selectedSymbol]: {
                 ...(prev[selectedSymbol] || {}),
-                [selectedTimeframe]: [],
+                [selectedTimeframe]: fallbackHistory,
               }
             }));
           }
         }
       } catch (err) {
+        console.error('Failed to fetch historical data:', err);
         if (active) {
+          const fallbackHistory = generateHistoricalData(selectedSymbol, selectedTimeframe, 200);
           setChartData((prev) => ({
             ...prev,
             [selectedSymbol]: {
               ...(prev[selectedSymbol] || {}),
-              [selectedTimeframe]: [],
+              [selectedTimeframe]: fallbackHistory,
             }
           }));
         }
@@ -442,6 +589,47 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       active = false;
     };
   }, [selectedSymbol, selectedTimeframe]);
+
+  // --- Central Dynamic Price Ticking simulation loop ---
+  useEffect(() => {
+    if (wsConnected) return; // Bypass if live WebSocket is streaming rates
+
+    const runSimulationTick = () => {
+      // 1. Tick some watch list instruments
+      setWatchlistItems((prevItems) => {
+        const nextTickStates: Record<string, 'up' | 'down' | 'none'> = {};
+        const updatedList = prevItems.map((item) => {
+          // 40% probability of tick occurring per timer interval
+          if (Math.random() > 0.4) {
+            nextTickStates[item.symbol] = 'none';
+            return item;
+          }
+
+          const ticked = simulatePriceTick(item);
+          nextTickStates[item.symbol] = ticked.price > item.price ? 'up' : 'down';
+          return ticked;
+        });
+
+        // Set visual flash class triggers
+        setTickStates(nextTickStates);
+        // Clear flashes after 900ms
+        setTimeout(() => {
+          setTickStates((s) => {
+            const cleared = { ...s };
+            Object.keys(cleared).forEach((k) => {
+              if (cleared[k] !== 'none') cleared[k] = 'none';
+            });
+            return cleared;
+          });
+        }, 900);
+
+        return updatedList;
+      });
+    };
+
+    const interval = setInterval(runSimulationTick, 3000);
+    return () => clearInterval(interval);
+  }, [wsConnected]);
 
   // --- Update chart candlesticks and paper positions on price change ---
   const activeWatchItem = useMemo(() => {
@@ -494,20 +682,25 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (!priceItem) return pos;
 
       const livePrice = priceItem.price;
+      const contractSize = 100000; // Standard forex contract size
+
       // Calculate direct leverage gain / loss in USD units
-      let pnl = parseFloat(((pos.type === 'BUY' ? (livePrice - pos.entryPrice) : (pos.entryPrice - livePrice)) * pos.amount * CONTRACT_SIZE).toFixed(2));
+      let pnl = parseFloat(((pos.type === 'BUY' ? (livePrice - pos.entryPrice) : (pos.entryPrice - livePrice)) * pos.amount * contractSize).toFixed(2));
 
       // Automatic SL / TP hits simulation trigger check
       const isSlHit = pos.sl !== undefined && (pos.type === 'BUY' ? livePrice <= pos.sl : livePrice >= pos.sl);
       const isTpHit = pos.tp !== undefined && (pos.type === 'BUY' ? livePrice >= pos.tp : livePrice <= pos.tp);
 
       if (isSlHit || isTpHit) {
-        const exitPrice = pos.sl ?? pos.tp;
+        const exitPrice = isSlHit ? pos.sl! : pos.tp!;
         const reason = isSlHit ? 'SL Hit' : 'TP Hit';
-        const exitPnl = parseFloat(((pos.type === 'BUY' ? (exitPrice - pos.entryPrice) : (pos.entryPrice - exitPrice)) * pos.amount * CONTRACT_SIZE).toFixed(2));
+        const exitPnl = parseFloat(((pos.type === 'BUY' ? (exitPrice - pos.entryPrice) : (pos.entryPrice - exitPrice)) * pos.amount * contractSize).toFixed(2));
+        const nowMs = Date.now();
+        const openTimeMs = pos.openedAt || (nowMs - 3600000);
+        const duration = Math.max(1000, nowMs - openTimeMs);
 
         closedToLog.push({
-          id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+          id: `closed_${nowMs}_${Math.random().toString(36).substr(2, 4)}`,
           symbol: pos.symbol,
           type: pos.type,
           entryPrice: pos.entryPrice,
@@ -515,7 +708,10 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
           amount: pos.amount,
           pnl: exitPnl,
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          closeReason: reason
+          closeReason: reason,
+          openedAt: openTimeMs,
+          closedAt: nowMs,
+          durationMs: duration,
         });
         nextDifferent = true;
         return null;
@@ -544,8 +740,9 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // --- Open Paper Positions ---
   const handleOpenPosition = React.useCallback((type: 'BUY' | 'SELL', amount: number, sl?: number, tp?: number) => {
+    const nowMs = Date.now();
     const newPos: TradePosition = {
-      id: `pos_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      id: `pos_${nowMs}_${Math.random().toString(36).substr(2, 4)}`,
       symbol: selectedSymbol,
       type,
       entryPrice: currentPrice,
@@ -555,6 +752,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       tp,
       pnl: 0,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      openedAt: nowMs,
     };
     setPositions((prev) => [newPos, ...prev]);
   }, [selectedSymbol, currentPrice]);
@@ -564,17 +762,22 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setPositions((prev) => {
       const target = prev.find((p) => p.id === id);
       if (target) {
-        const livePrice = target.currentPrice ?? currentPrice;
+        const livePrice = target.currentPrice || currentPrice;
+        const contractSize = 100000;
         let pnl = 0;
         if (target.type === 'BUY') {
-          pnl = (livePrice - target.entryPrice) * target.amount * CONTRACT_SIZE;
+          pnl = (livePrice - target.entryPrice) * target.amount * contractSize;
         } else {
-          pnl = (target.entryPrice - livePrice) * target.amount * CONTRACT_SIZE;
+          pnl = (target.entryPrice - livePrice) * target.amount * contractSize;
         }
+
+        const nowMs = Date.now();
+        const openTimeMs = target.openedAt || (nowMs - 1800000);
+        const duration = Math.max(1000, nowMs - openTimeMs);
 
         setClosedTrades((prevClosed) => [
           {
-            id: `closed_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            id: `closed_${nowMs}_${Math.random().toString(36).substr(2, 4)}`,
             symbol: target.symbol,
             type: target.type,
             entryPrice: target.entryPrice,
@@ -583,6 +786,9 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
             pnl: parseFloat(pnl.toFixed(2)),
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
             closeReason: 'Manual',
+            openedAt: openTimeMs,
+            closedAt: nowMs,
+            durationMs: duration,
           },
           ...prevClosed,
         ]);

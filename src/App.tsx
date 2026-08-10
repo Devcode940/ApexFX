@@ -5,14 +5,14 @@ import { TradingChart } from './components/TradingChart';
 import { Watchlist } from './components/Watchlist';
 import { SignalPanel } from './components/SignalPanel';
 import { PositionsPanel } from './components/PositionsPanel';
+import { PerformanceDashboard } from './components/PerformanceDashboard';
 import { PatternPanel } from './components/PatternPanel';
 import { NewsPanel } from './components/NewsPanel';
 import { AiAssistant } from './components/AiAssistant';
 import { SupabaseSync } from './components/SupabaseSync';
-import { ErrorBoundary } from './components/ErrorBoundary';
 import { formatPrice, PAIRS_CONFIG } from './utils/forexData';
 
-import appLogo from './assets/images/app_logo_1782444134483.jpg';
+const appLogo = '/src/assets/images/app_logo_1782444134483.jpg';
 import { 
   Activity, 
   Clock, 
@@ -24,11 +24,9 @@ import {
 
 export default function App() {
   return (
-    <ErrorBoundary>
-      <TradingProvider>
-        <TradingTerminal />
-      </TradingProvider>
-    </ErrorBoundary>
+    <TradingProvider>
+      <TradingTerminal />
+    </TradingProvider>
   );
 }
 
@@ -56,7 +54,7 @@ function TradingTerminal() {
     volatility,
     priceRange,
     theme,
-    toggleTheme,
+    toggleTheme
   } = useTrading();
 
   return (
@@ -71,7 +69,7 @@ function TradingTerminal() {
               <img src={appLogo} className="w-full h-full object-cover" alt="ApexFX Logo" referrerPolicy="no-referrer" />
             </div>
             <div>
-              <h1 className={`font-display font-black text-base tracking-tight ${theme === 'dark' ? 'text-white' : 'text-zinc-955'} flex items-center gap-1.5 leading-none`}>
+              <h1 className={`font-display font-black text-base tracking-tight ${theme === 'dark' ? 'text-white' : 'text-zinc-950'} flex items-center gap-1.5 leading-none`}>
                 ApexFX <span className="text-emerald-400 text-[10px] font-mono px-1 py-0.5 rounded bg-emerald-950/40 border border-emerald-900/30 uppercase tracking-wider font-bold">Terminal</span>
               </h1>
               <p className={`text-[9px] ${theme === 'dark' ? 'text-zinc-400' : 'text-zinc-500'} font-medium tracking-wider uppercase mt-0.5 font-mono`}>
@@ -86,7 +84,7 @@ function TradingTerminal() {
             className={`p-2 rounded-lg transition-all border cursor-pointer flex items-center justify-center ${
               theme === 'dark' 
                 ? 'bg-zinc-900 hover:bg-zinc-800 text-amber-400 border-zinc-800 hover:border-zinc-700 shadow-md' 
-                : 'bg-white hover:bg-zinc-100 text-indigo-600 border-zinc-200 hover:border-zinc-300 shadow-sm'
+                : 'bg-white hover:bg-zinc-100 text-indigo-600 border-zinc-200 hover:border-zinc-350 shadow-sm'
             }`}
             title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Session Theme`}
             id="theme_toggle_btn"
@@ -304,18 +302,19 @@ function TradingTerminal() {
           {activeData.length > 0 ? (
             <TradingChart />
           ) : (
-            <div className="w-full h-[380px] rounded-lg border border-zinc-800 bg-zinc-950 flex items-center justify-center text-zinc-500 font-mono text-xs">
+            <div className="w-full h-[620px] rounded-lg border border-zinc-800 bg-zinc-950 flex items-center justify-center text-zinc-500 font-mono text-xs">
               Initializing Forex charting buffer...
             </div>
           )}
 
           {/* Mobile responsive tab buttons */}
-          <div className="md:hidden grid grid-cols-5 gap-1 bg-zinc-900 p-1 border border-zinc-800 rounded-xl relative z-10 select-none">
-            {(['chart', 'watchlist', 'signals', 'trader', 'analysis'] as const).map((tab) => (
+          {/* Mobile Navigation Tabs */}
+          <div className="md:hidden grid grid-cols-6 gap-1 bg-zinc-900 p-1 border border-zinc-800 rounded-xl relative z-10 select-none">
+            {(['chart', 'watchlist', 'signals', 'trader', 'performance', 'analysis'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setMobileTab(tab)}
-                className={`py-2 text-[10px] font-bold text-center capitalize rounded-lg transition-all cursor-pointer ${
+                className={`py-2 text-[9px] font-bold text-center capitalize rounded-lg transition-all cursor-pointer ${
                   mobileTab === tab
                     ? 'bg-emerald-600 text-white shadow'
                     : 'text-zinc-400 hover:text-zinc-200'
@@ -340,6 +339,11 @@ function TradingTerminal() {
               <AiAssistant />
             </div>
 
+          </div>
+
+          {/* Comprehensive Performance & Telemetry Dashboard */}
+          <div className="w-full">
+            <PerformanceDashboard />
           </div>
 
         </section>
@@ -381,6 +385,10 @@ function TradingTerminal() {
             </div>
           )}
 
+          {mobileTab === 'performance' && (
+            <PerformanceDashboard />
+          )}
+
           {mobileTab === 'analysis' && (
             <div className="space-y-4">
               <AiAssistant />
@@ -393,3 +401,4 @@ function TradingTerminal() {
     </div>
   );
 }
+

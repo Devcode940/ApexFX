@@ -108,7 +108,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           lots: pos.amount,
           stop_loss: pos.sl || null,
           take_profit: pos.tp || null,
-          timestamp: Date.now(),
+          timestamp: new Date(pos.time).getTime(),
           pips: 0,
           profit: pos.pnl
         }));
@@ -132,8 +132,8 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           lots: trade.amount,
           profit: trade.pnl,
           pips: 0,
-          open_time: Date.now() - 3600000, // approximate open time
-          close_time: Date.now()
+          open_time: new Date(trade.time).getTime() - 3600000, // approximate open time
+          close_time: new Date(trade.time).getTime()
         }));
 
         const { error: tradeErr } = await supabase
@@ -266,8 +266,8 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
               <li>Add the credentials to your Vercel or local environment variables:</li>
             </ol>
             <div className="bg-black/40 p-2 rounded border border-zinc-850 font-mono text-[9px] text-zinc-300 space-y-1 mt-2">
-              <div>SUPABASE_URL=https://zrqscleekkenxfnrxvzg.supabase.co</div>
-              <div>SUPABASE_KEY=your-anon-key</div>
+              <div>VITE_SUPABASE_URL="your-supabase-url"</div>
+              <div>VITE_SUPABASE_ANON_KEY="your-anon-key"</div>
             </div>
             <p className="text-[10px] text-zinc-500 pt-1">
               Once these variables are set up, the Cloud Sync panel will activate automatically!
@@ -364,7 +364,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
                 <button
                   onClick={handlePullSync}
                   disabled={syncing}
-                  className="p-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold text-xs rounded-lg transition-colors flex flex-col items-center gap-1 cursor-pointer border border-zinc-700"
+                  className="p-2.5 bg-zinc-800 hover:bg-zinc-750 hover:bg-zinc-700 text-zinc-100 font-semibold text-xs rounded-lg transition-colors flex flex-col items-center gap-1 cursor-pointer border border-zinc-750"
                 >
                   <Check className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Pull from Cloud</span>
