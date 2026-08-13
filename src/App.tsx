@@ -84,7 +84,7 @@ function TradingTerminal() {
             className={`p-2 rounded-lg transition-all border cursor-pointer flex items-center justify-center ${
               theme === 'dark' 
                 ? 'bg-zinc-900 hover:bg-zinc-800 text-amber-400 border-zinc-800 hover:border-zinc-700 shadow-md' 
-                : 'bg-white hover:bg-zinc-100 text-indigo-600 border-zinc-200 hover:border-zinc-350 shadow-sm'
+                : 'bg-white hover:bg-zinc-100 text-indigo-600 border-zinc-200 hover:border-zinc-300 shadow-sm'
             }`}
             title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Session Theme`}
             id="theme_toggle_btn"
@@ -213,8 +213,8 @@ function TradingTerminal() {
                 <div className="h-4 w-px bg-zinc-800" />
                 <div className="text-right">
                   <span className="text-[9px] text-zinc-500 uppercase block leading-none">Twelve Data</span>
-                  <span className={`text-xs font-bold ${parseFloat(liveQuote.change) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {parseFloat(liveQuote.price).toFixed(PAIRS_CONFIG[selectedSymbol]?.pipDecimal + 1 || 5)}
+                  <span className={`text-xs font-bold ${(!isNaN(parseFloat(liveQuote.change)) && parseFloat(liveQuote.change) >= 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {!isNaN(parseFloat(liveQuote.price)) ? parseFloat(liveQuote.price).toFixed(PAIRS_CONFIG[selectedSymbol]?.pipDecimal + 1 || 5) : '—'}
                   </span>
                 </div>
               </>

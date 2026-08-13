@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useTransition } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useTransition } from 'react';
 import { 
   WatchlistItem, 
   Timeframe, 
@@ -6,7 +6,9 @@ import {
   TradePosition, 
   ClosedTrade, 
   Pattern, 
-  TradingSignal 
+  TradingSignal,
+  Candlestick,
+  LiveQuote
 } from '../types';
 import {
   generateDefaultWatchlist,
@@ -15,7 +17,9 @@ import {
   detectPatterns,
   generateSignal,
   PAIRS_CONFIG,
-  calculateVolatilityDetails
+  calculateVolatilityDetails,
+  getContractSize,
+  VolatilityDetails
 } from '../utils/forexData';
 
 interface TradingContextType {
@@ -34,8 +38,8 @@ interface TradingContextType {
   setSelectedSymbol: (symbol: string) => void;
   selectedTimeframe: Timeframe;
   setSelectedTimeframe: (timeframe: Timeframe) => void;
-  chartData: Record<string, Record<string, any[]>>;
-  setChartData: React.Dispatch<React.SetStateAction<Record<string, Record<string, any[]>>>>;
+  chartData: Record<string, Record<string, Candlestick[]>>;
+  setChartData: React.Dispatch<React.SetStateAction<Record<string, Record<string, Candlestick[]>>>>;
   watchlistItems: WatchlistItem[];
   setWatchlistItems: React.Dispatch<React.SetStateAction<WatchlistItem[]>>;
   indicators: TechnicalIndicatorsState;
@@ -53,16 +57,16 @@ interface TradingContextType {
   handleClearHistory: () => void;
   tickStates: Record<string, 'up' | 'down' | 'none'>;
   utcTime: string;
-  liveQuote: any;
+  liveQuote: LiveQuote | null;
   isRefreshingSignal: boolean;
   handleRefreshSignal: () => void;
 
   // Derived state
-  activeData: any[];
+  activeData: Candlestick[];
   currentPrice: number;
   activePatterns: Pattern[];
   activeSignal: TradingSignal | null;
-  volatility: any;
+  volatility: VolatilityDetails | null;
   priceRange: {
     low: number;
     high: number;
@@ -103,7 +107,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Core State
   const [selectedSymbol, setSelectedSymbol] = useState<string>('EURUSD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1H');
-  const [chartData, setChartData] = useState<Record<string, Record<string, any[]>>>({});
+  const [chartData, setChartData] = useState<Record<string, Record<string, Candlestick[]>>>({});
   const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => generateDefaultWatchlist());
   const [indicators, setIndicators] = useState<TechnicalIndicatorsState>(() => {
     const cached = localStorage.getItem('forexinsight_preferred_indicators');
@@ -188,6 +192,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return [
       {
         id: 'seed_trade_1',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'EURUSD',
         type: 'BUY',
         entryPrice: 1.0820,
@@ -202,6 +207,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       {
         id: 'seed_trade_2',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'GBPUSD',
         type: 'BUY',
         entryPrice: 1.2640,
@@ -216,6 +222,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       {
         id: 'seed_trade_3',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'USDJPY',
         type: 'SELL',
         entryPrice: 154.80,
@@ -230,6 +237,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       {
         id: 'seed_trade_4',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'XAUUSD',
         type: 'BUY',
         entryPrice: 2380.50,
@@ -244,6 +252,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       {
         id: 'seed_trade_5',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'EURUSD',
         type: 'SELL',
         entryPrice: 1.0870,
@@ -258,6 +267,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       {
         id: 'seed_trade_6',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'AUDUSD',
         type: 'BUY',
         entryPrice: 0.6520,
@@ -272,6 +282,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       {
         id: 'seed_trade_7',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'GBPUSD',
         type: 'SELL',
         entryPrice: 1.2710,
@@ -286,6 +297,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       {
         id: 'seed_trade_8',
+        isSample: true, // seeded demo data, not a real trade
         symbol: 'USDCHF',
         type: 'BUY',
         entryPrice: 0.8950,
@@ -304,11 +316,17 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Watchlist Tick Visual Flashes state
   const [tickStates, setTickStates] = useState<Record<string, 'up' | 'down' | 'none'>>({});
 
+  // Live mirror of watchlistItems for stable callbacks / intervals (WS, polling, sim ticks)
+  const watchlistRef = useRef(watchlistItems);
+  useEffect(() => {
+    watchlistRef.current = watchlistItems;
+  }, [watchlistItems]);
+
   // Clock
   const [utcTime, setUtcTime] = useState<string>('');
 
   // Live Twelve Data Quote
-  const [liveQuote, setLiveQuote] = useState<any>(null);
+  const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
 
   // Signal Refresh Animation State
   const [isRefreshingSignal, setIsRefreshingSignal] = useState<boolean>(false);
@@ -391,51 +409,33 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     let pollingInterval: any = null;
 
     const handlePricesUpdate = (rates: Record<string, any>) => {
-      setWatchlistItems((prevItems) => {
-        const nextTickStates: Record<string, 'up' | 'down' | 'none'> = {};
-        const updated = prevItems.map((item) => {
-          const update = rates[item.symbol];
-          if (update) {
-            const priceDiff = update.price - item.price;
-            if (priceDiff !== 0) {
-              nextTickStates[item.symbol] = priceDiff > 0 ? 'up' : 'down';
-            } else {
-              nextTickStates[item.symbol] = 'none';
-            }
-            return {
-              ...item,
-              price: update.price,
-              high: update.high,
-              low: update.low,
-              change: update.change,
-            };
+      const prevItems = watchlistRef.current;
+      const nextTickStates: Record<string, 'up' | 'down' | 'none'> = {};
+      const updated = prevItems.map((item) => {
+        const update = rates[item.symbol];
+        if (update) {
+          const priceDiff = update.price - item.price;
+          nextTickStates[item.symbol] = priceDiff > 0 ? 'up' : (priceDiff < 0 ? 'down' : 'none');
+          return {
+            ...item,
+            price: update.price,
+            high: update.high,
+            low: update.low,
+            change: update.change,
+          };
+        }
+        return item;
+      });
+
+      setWatchlistItems(updated);
+      setTickStates((prevFlashes) => {
+        const nextFlashes = { ...prevFlashes };
+        Object.keys(nextTickStates).forEach((sym) => {
+          if (nextTickStates[sym] !== 'none') {
+            nextFlashes[sym] = nextTickStates[sym];
           }
-          return item;
         });
-
-        // Update visual flashes
-        setTickStates((prevFlashes) => {
-          const nextFlashes = { ...prevFlashes };
-          Object.keys(nextTickStates).forEach((sym) => {
-            if (nextTickStates[sym] !== 'none') {
-              nextFlashes[sym] = nextTickStates[sym];
-            }
-          });
-          return nextFlashes;
-        });
-
-        // Clear flashes after 900ms
-        setTimeout(() => {
-          setTickStates((s) => {
-            const cleared = { ...s };
-            Object.keys(cleared).forEach((k) => {
-              if (cleared[k] !== 'none') cleared[k] = 'none';
-            });
-            return cleared;
-          });
-        }, 900);
-
-        return updated;
+        return nextFlashes;
       });
     };
 
@@ -594,42 +594,45 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     if (wsConnected) return; // Bypass if live WebSocket is streaming rates
 
-    const runSimulationTick = () => {
-      // 1. Tick some watch list instruments
-      setWatchlistItems((prevItems) => {
-        const nextTickStates: Record<string, 'up' | 'down' | 'none'> = {};
-        const updatedList = prevItems.map((item) => {
-          // 40% probability of tick occurring per timer interval
-          if (Math.random() > 0.4) {
-            nextTickStates[item.symbol] = 'none';
-            return item;
-          }
+    const interval = setInterval(() => {
+      const prevItems = watchlistRef.current;
+      const nextTickStates: Record<string, 'up' | 'down' | 'none'> = {};
+      const updatedList = prevItems.map((item) => {
+        // 40% probability of tick occurring per timer interval
+        if (Math.random() > 0.4) {
+          nextTickStates[item.symbol] = 'none';
+          return item;
+        }
 
-          const ticked = simulatePriceTick(item);
-          nextTickStates[item.symbol] = ticked.price > item.price ? 'up' : 'down';
-          return ticked;
-        });
-
-        // Set visual flash class triggers
-        setTickStates(nextTickStates);
-        // Clear flashes after 900ms
-        setTimeout(() => {
-          setTickStates((s) => {
-            const cleared = { ...s };
-            Object.keys(cleared).forEach((k) => {
-              if (cleared[k] !== 'none') cleared[k] = 'none';
-            });
-            return cleared;
-          });
-        }, 900);
-
-        return updatedList;
+        const ticked = simulatePriceTick(item);
+        nextTickStates[item.symbol] = ticked.price > item.price ? 'up' : 'down';
+        return ticked;
       });
-    };
 
-    const interval = setInterval(runSimulationTick, 3000);
+      setWatchlistItems(updatedList);
+      setTickStates(nextTickStates);
+    }, 3000);
+
     return () => clearInterval(interval);
   }, [wsConnected]);
+
+  // Clear tick flashes shortly after they appear (driven by state, not updater side-effects)
+  useEffect(() => {
+    const hasActiveFlash = Object.values(tickStates).some((s) => s !== 'none');
+    if (!hasActiveFlash) return;
+
+    const timer = setTimeout(() => {
+      setTickStates((s) => {
+        const cleared = { ...s };
+        Object.keys(cleared).forEach((k) => {
+          if (cleared[k] !== 'none') cleared[k] = 'none';
+        });
+        return cleared;
+      });
+    }, 900);
+
+    return () => clearTimeout(timer);
+  }, [tickStates]);
 
   // --- Update chart candlesticks and paper positions on price change ---
   const activeWatchItem = useMemo(() => {
@@ -637,7 +640,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [watchlistItems, selectedSymbol]);
 
   const currentPrice = useMemo(() => {
-    return activeWatchItem?.price || PAIRS_CONFIG[selectedSymbol].basePrice;
+    return activeWatchItem?.price || PAIRS_CONFIG[selectedSymbol]?.basePrice || 1;
   }, [activeWatchItem, selectedSymbol]);
 
   useEffect(() => {
@@ -682,7 +685,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (!priceItem) return pos;
 
       const livePrice = priceItem.price;
-      const contractSize = 100000; // Standard forex contract size
+      const contractSize = getContractSize(pos.symbol);
 
       // Calculate direct leverage gain / loss in USD units
       let pnl = parseFloat(((pos.type === 'BUY' ? (livePrice - pos.entryPrice) : (pos.entryPrice - livePrice)) * pos.amount * contractSize).toFixed(2));
@@ -762,8 +765,11 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setPositions((prev) => {
       const target = prev.find((p) => p.id === id);
       if (target) {
-        const livePrice = target.currentPrice || currentPrice;
-        const contractSize = 100000;
+        // Resolve the exit price from the position's own instrument feed,
+        // never from the currently selected symbol.
+        const priceItem = watchlistItems.find((item) => item.symbol === target.symbol);
+        const livePrice = priceItem?.price ?? target.currentPrice ?? currentPrice;
+        const contractSize = getContractSize(target.symbol);
         let pnl = 0;
         if (target.type === 'BUY') {
           pnl = (livePrice - target.entryPrice) * target.amount * contractSize;
@@ -795,7 +801,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       return prev.filter((p) => p.id !== id);
     });
-  }, [currentPrice]);
+  }, [watchlistItems, currentPrice]);
 
   const handleClearHistory = React.useCallback(() => {
     setClosedTrades([]);
@@ -815,8 +821,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [activeData]);
 
   const activeSignal = useMemo(() => {
-    return generateSignal(selectedSymbol, selectedTimeframe, activeData, indicators);
-  }, [selectedSymbol, selectedTimeframe, activeData, indicators]);
+    return generateSignal(selectedSymbol, selectedTimeframe, activeData, indicators, activePatterns);
+  }, [selectedSymbol, selectedTimeframe, activeData, indicators, activePatterns]);
 
   const volatility = useMemo(() => {
     return calculateVolatilityDetails(activeData, selectedSymbol);

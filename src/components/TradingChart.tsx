@@ -8,7 +8,8 @@ import {
   LineSeries, 
   HistogramSeries, 
   ColorType,
-  createSeriesMarkers
+  createSeriesMarkers,
+  UTCTimestamp
 } from 'lightweight-charts';
 import { Candlestick, TechnicalIndicatorsState, Pattern, Timeframe } from '../types';
 import {
@@ -317,9 +318,9 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
   useEffect(() => {
     try {
       const cached = localStorage.getItem(`forexinsight_drawings_${symbol}`);
-      setDrawings(cached ? JSON.parse(cached) : { horizontalLines: [], trendlines: [], annotations: [] });
+      setDrawings(cached ? JSON.parse(cached) : { horizontalLines: [], trendlines: [], annotations: [], riskRewards: [], fibonacci: [] });
     } catch {
-      setDrawings({ horizontalLines: [], trendlines: [], annotations: [] });
+      setDrawings({ horizontalLines: [], trendlines: [], annotations: [], riskRewards: [], fibonacci: [] });
     }
     setActiveTool('none');
     setTrendlineStart(null);
@@ -931,7 +932,7 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
         const el = document.getElementById(`rr-tool-${tool.id}`);
         if (!el) return;
 
-        const startX = chart.timeScale().timeToCoordinate(tool.entry.time);
+        const startX = chart.timeScale().timeToCoordinate(tool.entry.time as UTCTimestamp);
         if (startX === null) {
           el.style.display = 'none';
           return;
@@ -968,8 +969,8 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
 
         // Sort times so x1 is earlier than x2
         const times = [tool.start.time, tool.end.time].sort((a, b) => a - b);
-        const startX = chart.timeScale().timeToCoordinate(times[0]);
-        const endX = chart.timeScale().timeToCoordinate(times[1]);
+        const startX = chart.timeScale().timeToCoordinate(times[0] as UTCTimestamp);
+        const endX = chart.timeScale().timeToCoordinate(times[1] as UTCTimestamp);
         
         if (startX === null) {
           el.style.display = 'none';
@@ -2013,8 +2014,8 @@ export const TradingChart: React.FC<TradingChartProps> = () => {
                 </div>
                 <div className="flex gap-3 mb-0.5">
                   <span className="flex gap-1.5"><span className="text-zinc-500">O</span><span className={`font-semibold ${hudData.open > hudData.close ? 'text-red-500' : 'text-emerald-500'}`}>{hudData.open.toFixed((PAIRS_CONFIG[symbol] || {pipDecimal: 4}).pipDecimal + 1)}</span></span>
-                  <span className="flex gap-1.5"><span className="text-zinc-500">H</span><span className={`font-semibold ${theme === 'dark' ? 'text-zinc-350' : 'text-zinc-700'}`}>{hudData.high.toFixed((PAIRS_CONFIG[symbol] || {pipDecimal: 4}).pipDecimal + 1)}</span></span>
-                  <span className="flex gap-1.5"><span className="text-zinc-500">L</span><span className={`font-semibold ${theme === 'dark' ? 'text-zinc-350' : 'text-zinc-700'}`}>{hudData.low.toFixed((PAIRS_CONFIG[symbol] || {pipDecimal: 4}).pipDecimal + 1)}</span></span>
+                  <span className="flex gap-1.5"><span className="text-zinc-500">H</span><span className={`font-semibold ${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'}`}>{hudData.high.toFixed((PAIRS_CONFIG[symbol] || {pipDecimal: 4}).pipDecimal + 1)}</span></span>
+                  <span className="flex gap-1.5"><span className="text-zinc-500">L</span><span className={`font-semibold ${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'}`}>{hudData.low.toFixed((PAIRS_CONFIG[symbol] || {pipDecimal: 4}).pipDecimal + 1)}</span></span>
                   <span className="flex gap-1.5"><span className="text-zinc-500">C</span><span className={`font-semibold ${hudData.close >= hudData.open ? 'text-emerald-500' : 'text-red-500'}`}>{hudData.close.toFixed((PAIRS_CONFIG[symbol] || {pipDecimal: 4}).pipDecimal + 1)}</span></span>
                 </div>
                 

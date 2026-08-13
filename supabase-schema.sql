@@ -73,8 +73,12 @@ CREATE TABLE IF NOT EXISTS public.closed_trades (
     pips NUMERIC NOT NULL,
     open_time BIGINT NOT NULL,
     close_time BIGINT NOT NULL,
+    close_reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Backfill column for databases created before this migration
+ALTER TABLE public.closed_trades ADD COLUMN IF NOT EXISTS close_reason TEXT;
 
 -- Enable RLS on closed_trades
 ALTER TABLE public.closed_trades ENABLE ROW LEVEL SECURITY;

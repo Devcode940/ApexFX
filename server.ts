@@ -9,7 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -118,24 +118,29 @@ function broadcastPrices() {
   });
 }
 
-// Initial sync on server start
-fetchRealLatestPrices().then(() => {
-  console.log('[Server] Successfully synchronized initial real Forex and Commodity quotes.');
-  broadcastPrices();
-});
-
-// Sync real latest quotes every 30 seconds
-setInterval(() => {
+// Only run the persistent streaming loop on Node hosts. On Vercel (serverless),
+// these module-level timers would spin up on every cold import — the stateless
+// HTTP endpoints remain available and the client falls back to polling.
+if (!process.env.VERCEL) {
+  // Initial sync on server start
   fetchRealLatestPrices().then(() => {
+    console.log('[Server] Successfully synchronized initial real Forex and Commodity quotes.');
     broadcastPrices();
   });
-}, 30000);
 
-// Start server micro-ticking loop every 2 seconds
-setInterval(() => {
-  tickServerWatchlist();
-  broadcastPrices();
-}, 2000);
+  // Sync real latest quotes every 30 seconds
+  setInterval(() => {
+    fetchRealLatestPrices().then(() => {
+      broadcastPrices();
+    });
+  }, 30000);
+
+  // Start server micro-ticking loop every 2 seconds
+  setInterval(() => {
+    tickServerWatchlist();
+    broadcastPrices();
+  }, 2000);
+}
 
 wss.on('connection', (ws) => {
   const initialPayload = JSON.stringify({
@@ -370,19 +375,57 @@ app.get('/api/market/history', async (req, res) => {
   }
 });
 
+// --- /api/chat guardrails: rate limiting + payload caps ---
+const chatRateBuckets = new Map<string, number[]>();
+const CHAT_MAX_PER_WINDOW = 10;
+const CHAT_WINDOW_MS = 60_000;
+const CHAT_MAX_HISTORY = 30;
+const CHAT_MAX_MESSAGE_LEN = 8000;
+const CHAT_TIMEOUT_MS = 45_000;
+
+function isChatRateLimited(key: string): boolean {
+  const now = Date.now();
+  const cutoff = now - CHAT_WINDOW_MS;
+  const hits = (chatRateBuckets.get(key) || []).filter((t) => t > cutoff);
+  if (hits.length >= CHAT_MAX_PER_WINDOW) {
+    chatRateBuckets.set(key, hits);
+    return true;
+  }
+  hits.push(now);
+  chatRateBuckets.set(key, hits);
+  return false;
+}
+
 // 2. REAL AI API: Real Gemini model chat endpoint
 app.post('/api/chat', async (req, res) => {
   try {
     const { messages, selectedSymbol, selectedTimeframe, activeSignal } = req.body;
-    
+
     if (!ai) {
       return res.status(500).json({
         error: 'GEMINI_API_KEY environment variable is not configured. Please set it in Settings > Secrets.',
       });
     }
 
-    if (!messages || !Array.isArray(messages)) {
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Invalid or missing messages array.' });
+    }
+
+    // Rate limit by client IP (cheap in-memory sliding window)
+    const clientKey =
+      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
+      req.socket.remoteAddress ||
+      'unknown';
+    if (isChatRateLimited(clientKey)) {
+      return res.status(429).json({ error: 'Too many requests. Please wait a moment and try again.' });
+    }
+
+    // Cap history length and per-message size
+    const recent = messages.slice(-CHAT_MAX_HISTORY);
+    for (const m of recent) {
+      if (typeof m.text !== 'string' || m.text.length > CHAT_MAX_MESSAGE_LEN) {
+        return res.status(400).json({ error: `Message too long (maximum ${CHAT_MAX_MESSAGE_LEN} characters).` });
+      }
     }
 
     // Format prompt context
@@ -395,41 +438,50 @@ Latest analytical consensus signal: ${activeSignal ? JSON.stringify(activeSignal
 Provide professional, accurate, and insightful trading or analysis answers. Use clean markdown formatting. Keep answers concise, highly specific, and focused on technical/fundamental aspects of forex trading. Use the exact symbol's pip and price characteristics in your explanations.
 `;
 
-    const chatHistory = messages.map((m: any) => ({
-      role: m.sender === 'user' ? 'user' : 'model',
-      parts: [{ text: m.text }],
-    }));
-
-    // Add instructions and context to the last message or as system instructions if supported
-    // Since we want to provide the user context with every message, we can append it as a guide:
-    const lastMessage = messages[messages.length - 1];
-    let imagePart: any = null;
-    
-    if (lastMessage && lastMessage.image) {
-      const imgStr = lastMessage.image;
-      const matches = imgStr.match(/^data:([^;]+);base64,(.+)$/);
-      if (matches && matches.length === 3) {
-        imagePart = {
-          inlineData: {
-            mimeType: matches[1],
-            data: matches[2],
+    // Send the full conversation history so the model keeps multi-turn context.
+    // Attach any inline chart snapshot to the user message that carries it.
+    const contents = recent
+      .map((m: any) => {
+        const parts: any[] = [];
+        if (m.image) {
+          const imgStr = String(m.image);
+          const matches = imgStr.match(/^data:([^;]+);base64,(.+)$/);
+          if (matches && matches.length === 3) {
+            parts.push({
+              inlineData: {
+                mimeType: matches[1],
+                data: matches[2],
+              },
+            });
           }
-        };
-      }
+        }
+        const text = typeof m.text === 'string' ? m.text : '';
+        if (text.trim()) {
+          parts.push({ text });
+        }
+        return { role: m.sender === 'user' ? 'user' : 'model', parts };
+      })
+      .filter((c: any) => c.parts.length > 0);
+
+    if (contents.length === 0) {
+      return res.status(400).json({ error: 'No usable message content.' });
     }
 
-    const textPart = { text: `${contextStr}\n\nUser Question:\n${lastMessage?.text || 'Please analyze this chart snapshot.'}` };
-    const contents = [
-      {
-        role: 'user',
-        parts: imagePart ? [imagePart, textPart] : [textPart],
-      }
-    ];
+    // Gemini requires the first turn to come from the user role
+    if (contents[0].role !== 'user') {
+      contents[0].role = 'user';
+    }
 
-    const result = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: contents,
-    });
+    const result = await Promise.race([
+      ai.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents,
+        config: { systemInstruction: contextStr },
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Gemini request timed out after ${CHAT_TIMEOUT_MS / 1000}s.`)), CHAT_TIMEOUT_MS)
+      ),
+    ]);
 
     res.json({
       text: result.text || "I apologize, but I couldn't generate a response. Please try again.",

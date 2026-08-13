@@ -1,0 +1,110 @@
+import { describe, it, expect } from 'vitest';
+import {
+  formatPrice,
+  getContractSize,
+  computeSMA,
+  computeRSI,
+  calculateVolatilityDetails,
+  generateHistoricalData,
+  detectPatterns,
+  generateSignal,
+} from './forexData';
+
+describe('formatPrice', () => {
+  it('formats forex pairs with 5 decimals', () => {
+    expect(formatPrice(1.08523, 'EURUSD')).toBe('1.08523');
+  });
+
+  it('formats JPY pairs with 3 decimals', () => {
+    expect(formatPrice(155.35, 'USDJPY')).toBe('155.350');
+  });
+
+  it('handles null/undefined safely', () => {
+    expect(formatPrice(null as any, 'EURUSD')).toBe('0.00');
+    expect(formatPrice(undefined as any, 'EURUSD')).toBe('0.00');
+  });
+});
+
+describe('getContractSize', () => {
+  it('uses 100,000 units for forex', () => {
+    expect(getContractSize('EURUSD')).toBe(100000);
+  });
+
+  it('uses 100 troy oz per lot for gold', () => {
+    expect(getContractSize('XAUUSD')).toBe(100);
+  });
+
+  it('uses 5,000 troy oz per lot for silver', () => {
+    expect(getContractSize('XAGUSD')).toBe(5000);
+  });
+});
+
+describe('computeSMA', () => {
+  it('returns null during warmup and the correct average after', () => {
+    const data = generateHistoricalData('EURUSD', '1H', 30);
+    const sma = computeSMA(data, 20);
+    expect(sma[0]).toBeNull();
+    expect(sma[19]).not.toBeNull();
+    const expected = data.slice(0, 20).reduce((acc, c) => acc + c.close, 0) / 20;
+    expect(sma[19]).toBeCloseTo(expected, 5);
+  });
+});
+
+describe('computeRSI', () => {
+  it('stays within the 0-100 band', () => {
+    const data = generateHistoricalData('EURUSD', '1H', 60);
+    const rsi = computeRSI(data, 14).filter((v): v is number => v !== null);
+    expect(rsi.length).toBeGreaterThan(0);
+    rsi.forEach((v) => {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(100);
+    });
+  });
+});
+
+describe('calculateVolatilityDetails', () => {
+  it('classifies a range explosion as HIGH against a calm baseline', () => {
+    const data = generateHistoricalData('EURUSD', '1H', 30);
+    const last = data[data.length - 1];
+    // Latest candle explodes in range: ATR spikes relative to prior candles
+    data[data.length - 1] = { ...last, high: last.high + 0.5, low: last.low - 0.5 };
+    const vol = calculateVolatilityDetails(data, 'EURUSD');
+    expect(vol).not.toBeNull();
+    // Regression: the spike must be measured against the NON-latest baseline,
+    // so it must register as HIGH rather than being dampened toward MEDIUM.
+    expect(vol!.riskLevel).toBe('HIGH');
+    expect(vol!.ratio).toBeGreaterThan(1.2);
+  });
+});
+
+describe('detectPatterns', () => {
+  it('scans generated candles without throwing and returns typed results', () => {
+    const data = generateHistoricalData('EURUSD', '1H', 120);
+    const patterns = detectPatterns(data);
+    expect(Array.isArray(patterns)).toBe(true);
+    patterns.forEach((p) => {
+      expect(['bullish', 'bearish', 'neutral']).toContain(p.type);
+      expect(p.name.length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe('generateSignal', () => {
+  it('returns a bounded signal with sane tp/sl when a direction is given', () => {
+    const data = generateHistoricalData('EURUSD', '1H', 60);
+    const signal = generateSignal(
+      'EURUSD',
+      '1H',
+      data,
+      { sma: true, ema: true, rsi: true, macd: true, bollinger: true, fibonacci: false },
+      detectPatterns(data) // reuse precomputed patterns
+    );
+    expect(['BUY', 'SELL', 'NEUTRAL']).toContain(signal.type);
+    expect(signal.confidence).toBeGreaterThanOrEqual(0);
+    expect(signal.confidence).toBeLessThanOrEqual(100);
+    if (signal.type !== 'NEUTRAL') {
+      expect(signal.tp).toBeGreaterThan(0);
+      expect(signal.sl).toBeGreaterThan(0);
+    }
+  });
+});

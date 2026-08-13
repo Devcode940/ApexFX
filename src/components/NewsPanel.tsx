@@ -7,6 +7,15 @@ import { useTrading } from '../context/TradingContext';
 
 interface NewsPanelProps {}
 
+interface FinnhubNewsItem {
+  id: number;
+  headline: string;
+  summary?: string;
+  source?: string;
+  datetime: number;
+  url?: string;
+}
+
 export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
   const { selectedSymbol } = useTrading();
   const [news, setNews] = useState<NewsItem[]>(CURRENT_NEWS);
@@ -30,11 +39,11 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
 
         if (Array.isArray(data) && data.length > 0) {
           // Map Finnhub news format to our NewsItem type
-          const formattedNews: NewsItem[] = data.slice(0, 15).map((item: any) => {
+          const formattedNews: NewsItem[] = data.slice(0, 15).map((item: FinnhubNewsItem) => {
             const date = new Date(item.datetime * 1000);
             
             // Generate some plausible affected pairs from text
-            const text = `${item.headline} ${item.summary}`.toUpperCase();
+            const text = `${item.headline} ${item.summary || ''}`.toUpperCase();
             const pairs = [];
             if (text.includes('USD') || text.includes('FED')) pairs.push('USD');
             if (text.includes('EUR') || text.includes('ECB')) pairs.push('EUR');
@@ -50,7 +59,6 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
               impact: 'MEDIUM', // Finnhub free doesn't easily give impact rating
               affectedPairs: pairs,
               sentiment: 'neutral', // default, could be analyzed with AI if we had time
-              summary: item.summary
             };
           });
           setNews(formattedNews);

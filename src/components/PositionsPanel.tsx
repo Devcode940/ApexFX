@@ -819,7 +819,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                             type="button"
                             onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
                             disabled={historyPage === 1}
-                            className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer hover:bg-zinc-850"
+                            className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer hover:bg-zinc-800"
                           >
                             Prev
                           </button>
@@ -830,7 +830,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                             type="button"
                             onClick={() => setHistoryPage((p) => Math.min(totalPages, p + 1))}
                             disabled={historyPage === totalPages}
-                            className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer hover:bg-zinc-850"
+                            className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer hover:bg-zinc-800"
                           >
                             Next
                           </button>

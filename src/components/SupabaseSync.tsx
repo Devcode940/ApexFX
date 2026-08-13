@@ -108,7 +108,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           lots: pos.amount,
           stop_loss: pos.sl || null,
           take_profit: pos.tp || null,
-          timestamp: new Date(pos.time).getTime(),
+          timestamp: pos.openedAt ?? Date.now(),
           pips: 0,
           profit: pos.pnl
         }));
@@ -131,9 +131,10 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           exit_price: trade.exitPrice,
           lots: trade.amount,
           profit: trade.pnl,
-          pips: 0,
-          open_time: new Date(trade.time).getTime() - 3600000, // approximate open time
-          close_time: new Date(trade.time).getTime()
+          pips: Math.abs(Math.round((trade.exitPrice - trade.entryPrice) * (trade.symbol.includes('JPY') ? 100 : 10000))),
+          open_time: trade.openedAt ?? Date.now() - 3600000,
+          close_time: trade.closedAt ?? Date.now(),
+          close_reason: trade.closeReason
         }));
 
         const { error: tradeErr } = await supabase
@@ -182,7 +183,8 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
         sl: pos.stop_loss ? Number(pos.stop_loss) : undefined,
         tp: pos.take_profit ? Number(pos.take_profit) : undefined,
         pnl: Number(pos.profit || 0),
-        time: new Date(pos.timestamp).toISOString()
+        openedAt: pos.timestamp || undefined,
+        time: new Date(pos.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       }));
 
       const mappedTrades: ClosedTrade[] = (dbTrades || []).map(trade => ({
@@ -193,8 +195,10 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
         exitPrice: Number(trade.exit_price),
         amount: Number(trade.lots),
         pnl: Number(trade.profit),
-        time: new Date(trade.close_time).toISOString(),
-        closeReason: 'Manual'
+        time: new Date(trade.close_time || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        closeReason: (trade.close_reason as ClosedTrade['closeReason']) || 'Manual',
+        openedAt: trade.open_time || undefined,
+        closedAt: trade.close_time || undefined
       }));
 
       onImportSync(mappedPositions, mappedTrades);
@@ -235,7 +239,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
               </span>
             )
           ) : (
-            <span className="flex items-center gap-1 text-[9px] font-semibold bg-zinc-850 bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full">
+            <span className="flex items-center gap-1 text-[9px] font-semibold bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full">
               Local Storage
             </span>
           )}
@@ -265,7 +269,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
               <li>Go to the **SQL Editor**, paste the pre-built schema from <code className="text-zinc-300 font-mono text-[10px]">supabase-schema.sql</code>, and click **Run**.</li>
               <li>Add the credentials to your Vercel or local environment variables:</li>
             </ol>
-            <div className="bg-black/40 p-2 rounded border border-zinc-850 font-mono text-[9px] text-zinc-300 space-y-1 mt-2">
+            <div className="bg-black/40 p-2 rounded border border-zinc-800 font-mono text-[9px] text-zinc-300 space-y-1 mt-2">
               <div>VITE_SUPABASE_URL="your-supabase-url"</div>
               <div>VITE_SUPABASE_ANON_KEY="your-anon-key"</div>
             </div>
@@ -364,14 +368,14 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
                 <button
                   onClick={handlePullSync}
                   disabled={syncing}
-                  className="p-2.5 bg-zinc-800 hover:bg-zinc-750 hover:bg-zinc-700 text-zinc-100 font-semibold text-xs rounded-lg transition-colors flex flex-col items-center gap-1 cursor-pointer border border-zinc-750"
+                  className="p-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold text-xs rounded-lg transition-colors flex flex-col items-center gap-1 cursor-pointer border border-zinc-800"
                 >
                   <Check className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Pull from Cloud</span>
                 </button>
               </div>
 
-              <div className="p-2.5 bg-zinc-950/30 border border-zinc-850 rounded-lg text-[10px] text-zinc-500 font-mono space-y-1">
+              <div className="p-2.5 bg-zinc-950/30 border border-zinc-800 rounded-lg text-[10px] text-zinc-500 font-mono space-y-1">
                 <div className="flex justify-between">
                   <span>Local Active Positions:</span>
                   <span className="text-zinc-300 font-bold">{positions.length}</span>

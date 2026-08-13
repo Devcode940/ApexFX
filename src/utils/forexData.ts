@@ -23,6 +23,17 @@ export const PAIRS_CONFIG: Record<string, { name: string; basePrice: number; pip
   'XAGUSD': { name: 'Silver / USD', basePrice: 29.350, pipDecimal: 3, spreadPips: 2.0 },
 };
 
+// Contract size (base units per lot) per instrument. Forex standard lot = 100,000 units;
+// Gold = 100 troy oz per lot, Silver = 5,000 troy oz per lot.
+export const CONTRACT_SIZE: Record<string, number> = {
+  'XAUUSD': 100,
+  'XAGUSD': 5000,
+};
+
+export function getContractSize(symbol: string): number {
+  return CONTRACT_SIZE[symbol] || 100000;
+}
+
 export function getDecimalCount(symbol: string): number {
   const config = PAIRS_CONFIG[symbol];
   if (config) return config.pipDecimal + 1;
@@ -343,10 +354,12 @@ export function calculateVolatilityDetails(data: Candlestick[], symbol: string):
   const latestAtr = atrValues[atrValues.length - 1];
   if (latestAtr === null || latestAtr === undefined) return null;
 
-  // Find the average of all non-null ATR values for comparison
-  const validAtrs = atrValues.filter((v): v is number => v !== null);
-  if (validAtrs.length === 0) return null;
-  const avgAtr = validAtrs.reduce((acc, v) => acc + v, 0) / validAtrs.length;
+  // Baseline = average of all NON-LATEST ATR values, so the current ATR is
+  // compared against the established historical norm instead of itself.
+  const baselineAtrs = atrValues.slice(0, -1).filter((v): v is number => v !== null);
+  const avgAtr = baselineAtrs.length > 0
+    ? baselineAtrs.reduce((acc, v) => acc + v, 0) / baselineAtrs.length
+    : latestAtr;
 
   const ratio = latestAtr / (avgAtr || 1);
 
@@ -614,7 +627,8 @@ export function generateSignal(
   symbol: string,
   timeframe: Timeframe,
   data: Candlestick[],
-  indicators: TechnicalIndicatorsState
+  indicators: TechnicalIndicatorsState,
+  precomputedPatterns?: Pattern[]
 ): TradingSignal {
   const currentPrice = data[data.length - 1]?.close || 1.000;
   const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
@@ -638,7 +652,9 @@ export function generateSignal(
   const rsi = computeRSI(data, 14);
   const macdData = computeMACD(data);
   const bb = computeBollingerBands(data, 20, 2);
-  const patterns = detectPatterns(data);
+  // Reuse patterns already computed by the caller to avoid a duplicate
+  // full indicator sweep on every price tick.
+  const patterns = precomputedPatterns ?? detectPatterns(data);
 
   // Default values
   let buyScore = 50; // starts neutral
@@ -742,17 +758,13 @@ export function generateSignal(
 
   // Setup sensible dynamic SL / TP based on instrument pip steps
   const isJPY = symbol.includes('JPY');
-  let pipMultiplier = 10000;
   let atrEquivalent = 0.0025; // simplified ATR
 
   if (symbol === 'XAUUSD') {
-    pipMultiplier = 100;
     atrEquivalent = 8.50;
   } else if (symbol === 'XAGUSD') {
-    pipMultiplier = 1000;
     atrEquivalent = 0.25;
   } else if (isJPY) {
-    pipMultiplier = 100;
     atrEquivalent = 0.35;
   }
   let tp = currentPrice;
@@ -802,7 +814,6 @@ export function generateDefaultWatchlist(): WatchlistItem[] {
 // Simulate a ticking price update for watchlist and active chart
 export function simulatePriceTick(item: WatchlistItem): WatchlistItem {
   const config = PAIRS_CONFIG[item.symbol] || { pipDecimal: 4 };
-  const tickMultiplier = item.symbol.includes('JPY') ? 0.015 : 0.00015;
   const changePercent = (Math.random() - 0.5) * 0.15; // small ticks
   const diff = item.price * changePercent * 0.01;
 
