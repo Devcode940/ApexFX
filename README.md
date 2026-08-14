@@ -12,7 +12,7 @@ ApexFX Terminal is a high-performance, next-generation **multi-confluence Forex 
 * **Dual-Streaming Engine**: live WebSocket updates plus a reliable background HTTP polling fallback, so the price feed stays active even behind restrictive firewalls or through connection drops.
 * **Primary source — Twelve Data** (when `TWELVEDATA_API_KEY` is set): the server opens a Twelve Data WebSocket stream (`wss://ws.twelvedata.com/v1/quotes/price`) subscribed to all 8 instruments for low-latency tick prices (WebSocket credits only, not API credits), plus a REST quote sync every 60s for day high/low/change. If the stream drops, it reconnects automatically and REST polling takes over until it is back.
 * **Fallback source — Yahoo Finance**: without a Twelve Data key (or for any symbol Twelve Data fails to cover), the server polls real Yahoo quotes every **5 seconds** (`interval=1m&range=1d`). No random ticks are injected between syncs — every price is fetched from an upstream exchange feed.
-* **Covered instruments**: `EUR/USD`, `GBP/USD`, `USD/JPY`, `AUD/USD`, `USD/CAD`, `GBP/JPY`, plus precious metals `XAU/USD` (Gold) and `XAG/USD` (Silver).
+* **Covered instruments**: `EUR/USD`, `GBP/USD`, `USD/JPY`, `AUD/USD`, `USD/CAD`, `GBP/JPY`, plus precious metals `XAU/USD` (Gold) and `XAG/USD` (Silver). Silver is served from COMEX silver futures (`SI=F`) because Twelve Data free plans omit `XAG/USD` and Yahoo has no silver spot feed.
 * **Secondary rate sync**: on load the watchlist is pre-populated from the configured ForexRate API (falling back to the public Frankfurter/ECB API at `/api/forex`) until the WebSocket feed takes over.
 
 ### 2. High-Precision Charting & Confluence Overlays
@@ -68,7 +68,7 @@ FOREXRATE_API_KEY=your_forexrate_key_here    # optional — rate cross-check
 
 `GEMINI_API_KEY` is required for the AI assistant. **Adding `TWELVEDATA_API_KEY` makes Twelve Data the primary live market source** (WebSocket ticks + history). Without it, the market feed falls back to Yahoo Finance — quotes and history work with **no keys at all**.
 
-> **Twelve Data credits:** the REST `/quote` endpoint costs 1 API credit per symbol (8 for the full watchlist). On the free tier (8 credits/min, 800/day) keep the OHLC/change sync at ≥ 60s — the default. The WebSocket stream uses separate WebSocket credits (1 per symbol, not API credits) and is the recommended low-latency feed. Tune with `TWELVEDATA_QUOTE_SYNC_MS` / `TWELVEDATA_POLL_MS`.
+> **Twelve Data credits:** the REST `/quote` endpoint costs 1 API credit per symbol (8 for the full watchlist). On the free tier (8 credits/min, 800/day) keep the OHLC/change sync at ≥ 60s — the default. The WebSocket stream uses separate WebSocket credits (1 per symbol, not API credits) and is the recommended low-latency feed. Tune with `TWELVEDATA_QUOTE_SYNC_MS` / `TWELVEDATA_POLL_MS`. When Twelve Data returns `429` (per-minute limit reached), REST sync pauses until the next minute instead of hammering the API; the WebSocket stream keeps delivering ticks. Symbols outside the plan (e.g. `XAG/USD` → `403`) automatically fall back per-symbol to Yahoo.
 
 ### Installation
 

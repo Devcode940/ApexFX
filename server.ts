@@ -52,6 +52,10 @@ const TD_SYMBOLS: Record<string, string> = {
   'XAGUSD': 'XAG/USD',
 };
 const tdApiKey = process.env.TWELVEDATA_API_KEY;
+// When Twelve Data returns 429 (per-minute credit limit reached), REST work
+// pauses until the next minute; the WebSocket stream keeps delivering ticks
+// at no API credit cost.
+let tdRESTCooldownUntil = 0;
 // REST quote costs 1 API credit per symbol (8 for the full watchlist). Free tier
 // allows 8 credits/minute and 800/day, so the REST OHLC/change sync is slow.
 const TD_QUOTE_SYNC_MS = Number(process.env.TWELVEDATA_QUOTE_SYNC_MS) || 60_000;
@@ -66,16 +70,23 @@ async function fetchTwelveDataQuotes(): Promise<Set<string>> {
     const symbols = Object.values(TD_SYMBOLS).join(',');
     const res = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols)}&apikey=${tdApiKey}`);
     const raw = await res.json();
-    if (raw?.status === 'error' || raw?.code) {
+    if (raw?.code) {
       console.error('[TwelveData] quote error:', raw?.message || `code ${raw?.code}`);
+      if (raw.code === 429) tdRESTCooldownUntil = Date.now() + 60_000;
       return applied;
     }
-    // Multi-symbol responses wrap the quotes in `data`; single-symbol responses
-    // place the fields at the top level next to `symbol`.
-    const data = raw?.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
-      ? raw.data
-      : raw?.symbol ? { [raw.symbol]: raw } : null;
-    if (!data) return applied;
+    // Response shapes: a single-symbol response carries a `symbol` key with the
+    // quote fields at the top level; a multi-symbol response uses the symbols
+    // themselves as top-level keys (no `data` wrapper, no `status` field).
+    const data: Record<string, any> = {};
+    if (raw?.symbol && typeof raw.close !== 'undefined') {
+      data[raw.symbol] = raw;
+    } else {
+      for (const s of Object.values(TD_SYMBOLS)) {
+        if (raw?.[s] && typeof raw[s] === 'object' && typeof raw[s].close !== 'undefined') data[s] = raw[s];
+      }
+    }
+    if (Object.keys(data).length === 0) return applied;
 
     for (const item of serverWatchlist) {
       const tdSymbol = TD_SYMBOLS[item.symbol];
@@ -111,7 +122,9 @@ async function fetchYahooPricesFor(items: typeof serverWatchlist) {
     'USDCAD': 'USDCAD=X',
     'GBPJPY': 'GBPJPY=X',
     'XAUUSD': 'XAUUSD=X',
-    'XAGUSD': 'XAGUSD=X',
+    // Twelve Data free plans don't include XAG/USD and Yahoo has no XAGUSD=X
+    // spot feed — COMEX silver futures (SI=F) is the real-data fallback.
+    'XAGUSD': 'SI=F',
   };
 
   for (const item of items) {
@@ -224,6 +237,7 @@ function scheduleTdWsReconnect() {
 let tdSyncInFlight = false;
 async function tdSyncOnce() {
   if (tdSyncInFlight) return;
+  if (Date.now() < tdRESTCooldownUntil) return; // credits resetting — WebSocket still streams ticks
   tdSyncInFlight = true;
   try {
     const applied = await fetchTwelveDataQuotes();
@@ -251,6 +265,7 @@ async function fetchTwelveDataHistory(symbol: string, timeframe: string) {
     const raw = await res.json();
     if (raw?.status === 'error' || raw?.code || !Array.isArray(raw.values)) {
       console.warn('[TwelveData] time_series error:', raw?.message || raw?.code || 'no values');
+      if (raw?.code === 429) tdRESTCooldownUntil = Date.now() + 60_000;
       return null;
     }
     const candles = raw.values
@@ -264,7 +279,10 @@ async function fetchTwelveDataHistory(symbol: string, timeframe: string) {
         return { time, open, high, low, close, volume: Math.floor(parseFloat(v.volume) || 0) };
       })
       .filter((c: any) => c !== null);
-    if (candles.length === 0) return null;
+    if (candles.length === 0) {
+      console.warn('[TwelveData] time_series returned no valid candles');
+      return null;
+    }
     return { success: true, symbol, timeframe, data: candles };
   } catch (e) {
     console.warn('[TwelveData] time_series fetch failed:', (e as Error).message);
