@@ -2,12 +2,15 @@
 import { createClient } from '@supabase/supabase-js';
 
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder';
-
 export const isSupabaseConfigured = Boolean(
-  import.meta.env.VITE_SUPABASE_URL && 
+  import.meta.env.VITE_SUPABASE_URL &&
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Only construct the client when real credentials exist — no placeholder URL.
+export const supabase = isSupabaseConfigured
+  ? createClient(
+      import.meta.env.VITE_SUPABASE_URL as string,
+      import.meta.env.VITE_SUPABASE_ANON_KEY as string
+    )
+  : null;

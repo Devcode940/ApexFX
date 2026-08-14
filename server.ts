@@ -15,33 +15,94 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
 // --- Live Server Watchlist and WebSocket Streaming ---
-const PAIRS_CONFIG_WS: Record<string, { name: string; basePrice: number; pipDecimal: number }> = {
-  'EURUSD': { name: 'EUR / USD', basePrice: 1.08520, pipDecimal: 4 },
-  'GBPUSD': { name: 'GBP / USD', basePrice: 1.27150, pipDecimal: 4 },
-  'USDJPY': { name: 'USD / JPY', basePrice: 155.350, pipDecimal: 2 },
-  'AUDUSD': { name: 'AUD / USD', basePrice: 0.66450, pipDecimal: 4 },
-  'USDCAD': { name: 'USD / CAD', basePrice: 1.36780, pipDecimal: 4 },
-  'GBPJPY': { name: 'GBP / JPY', basePrice: 198.150, pipDecimal: 2 },
-  'XAUUSD': { name: 'Gold / USD', basePrice: 2325.40, pipDecimal: 2 },
-  'XAGUSD': { name: 'Silver / USD', basePrice: 29.350, pipDecimal: 3 },
+const PAIRS_CONFIG_WS: Record<string, { name: string; pipDecimal: number }> = {
+  'EURUSD': { name: 'EUR / USD', pipDecimal: 4 },
+  'GBPUSD': { name: 'GBP / USD', pipDecimal: 4 },
+  'USDJPY': { name: 'USD / JPY', pipDecimal: 2 },
+  'AUDUSD': { name: 'AUD / USD', pipDecimal: 4 },
+  'USDCAD': { name: 'USD / CAD', pipDecimal: 4 },
+  'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2 },
+  'XAUUSD': { name: 'Gold / USD', pipDecimal: 2 },
+  'XAGUSD': { name: 'Silver / USD', pipDecimal: 3 },
 };
 
+// Watchlist starts empty (no placeholder/fake prices); real quotes are filled
+// in by fetchRealLatestPrices() immediately on server start.
 const serverWatchlist = Object.keys(PAIRS_CONFIG_WS).map(symbol => {
   const config = PAIRS_CONFIG_WS[symbol];
-  const change = (Math.random() - 0.5) * 1.2;
-  const price = config.basePrice * (1 + change / 100);
-  const range = price * 0.005;
   return {
     symbol,
     name: config.name,
-    price: parseFloat(price.toFixed(config.pipDecimal + 1)),
-    change: parseFloat(change.toFixed(2)),
-    high: parseFloat((price + range * (0.3 + Math.random() * 0.5)).toFixed(config.pipDecimal + 1)),
-    low: parseFloat((price - range * (0.3 + Math.random() * 0.7)).toFixed(config.pipDecimal + 1)),
+    price: 0,
+    change: 0,
+    high: 0,
+    low: 0,
   };
 });
 
-async function fetchRealLatestPrices() {
+// --- Twelve Data integration (primary market source when TWELVEDATA_API_KEY is set) ---
+const TD_SYMBOLS: Record<string, string> = {
+  'EURUSD': 'EUR/USD',
+  'GBPUSD': 'GBP/USD',
+  'USDJPY': 'USD/JPY',
+  'AUDUSD': 'AUD/USD',
+  'USDCAD': 'USD/CAD',
+  'GBPJPY': 'GBP/JPY',
+  'XAUUSD': 'XAU/USD',
+  'XAGUSD': 'XAG/USD',
+};
+const tdApiKey = process.env.TWELVEDATA_API_KEY;
+// REST quote costs 1 API credit per symbol (8 for the full watchlist). Free tier
+// allows 8 credits/minute and 800/day, so the REST OHLC/change sync is slow.
+const TD_QUOTE_SYNC_MS = Number(process.env.TWELVEDATA_QUOTE_SYNC_MS) || 60_000;
+// REST polling interval used when the WebSocket stream is not delivering ticks.
+const TD_POLL_MS = Number(process.env.TWELVEDATA_POLL_MS) || 15_000;
+
+/** Refresh the watchlist from the Twelve Data REST quote endpoint (all 8 symbols in one request). */
+async function fetchTwelveDataQuotes(): Promise<Set<string>> {
+  const applied = new Set<string>();
+  if (!tdApiKey) return applied;
+  try {
+    const symbols = Object.values(TD_SYMBOLS).join(',');
+    const res = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols)}&apikey=${tdApiKey}`);
+    const raw = await res.json();
+    if (raw?.status === 'error' || raw?.code) {
+      console.error('[TwelveData] quote error:', raw?.message || `code ${raw?.code}`);
+      return applied;
+    }
+    // Multi-symbol responses wrap the quotes in `data`; single-symbol responses
+    // place the fields at the top level next to `symbol`.
+    const data = raw?.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+      ? raw.data
+      : raw?.symbol ? { [raw.symbol]: raw } : null;
+    if (!data) return applied;
+
+    for (const item of serverWatchlist) {
+      const tdSymbol = TD_SYMBOLS[item.symbol];
+      const q = tdSymbol ? data[tdSymbol] : null;
+      if (!q) continue;
+      const close = parseFloat(q.close);
+      if (!isFinite(close) || close <= 0) continue;
+      const high = parseFloat(q.high);
+      const low = parseFloat(q.low);
+      const pct = parseFloat(q.percent_change);
+      const config = PAIRS_CONFIG_WS[item.symbol];
+      item.price = parseFloat(close.toFixed(config.pipDecimal + 1));
+      if (isFinite(high) && high > 0) item.high = parseFloat(high.toFixed(config.pipDecimal + 1));
+      else item.high = Math.max(item.high, item.price);
+      if (isFinite(low) && low > 0) item.low = parseFloat(low.toFixed(config.pipDecimal + 1));
+      else item.low = item.low > 0 ? Math.min(item.low, item.price) : item.price;
+      if (isFinite(pct)) item.change = parseFloat(pct.toFixed(2));
+      applied.add(item.symbol);
+    }
+  } catch (e) {
+    console.error('[TwelveData] quote fetch failed:', (e as Error).message);
+  }
+  return applied;
+}
+
+/** Yahoo Finance fallback for a subset of the watchlist (used when Twelve Data is unavailable). */
+async function fetchYahooPricesFor(items: typeof serverWatchlist) {
   const symbolsMap: Record<string, string> = {
     'EURUSD': 'EURUSD=X',
     'GBPUSD': 'GBPUSD=X',
@@ -53,7 +114,7 @@ async function fetchRealLatestPrices() {
     'XAGUSD': 'XAGUSD=X',
   };
 
-  for (const item of serverWatchlist) {
+  for (const item of items) {
     try {
       const ticker = symbolsMap[item.symbol] || `${item.symbol}=X`;
       const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`, {
@@ -70,7 +131,8 @@ async function fetchRealLatestPrices() {
           const config = PAIRS_CONFIG_WS[item.symbol];
           item.price = parseFloat(currentPrice.toFixed(config.pipDecimal + 1));
           item.high = parseFloat((meta?.high || Math.max(item.high, currentPrice)).toFixed(config.pipDecimal + 1));
-          item.low = parseFloat((meta?.low || Math.min(item.low, currentPrice)).toFixed(config.pipDecimal + 1));
+          // First real quote: seed the low with the current price instead of 0
+          item.low = parseFloat((meta?.low || (item.low > 0 ? Math.min(item.low, currentPrice) : currentPrice)).toFixed(config.pipDecimal + 1));
           const prevClose = meta?.chartPreviousClose || currentPrice;
           item.change = parseFloat((((currentPrice - prevClose) / prevClose) * 100).toFixed(2));
         }
@@ -81,20 +143,136 @@ async function fetchRealLatestPrices() {
   }
 }
 
-function tickServerWatchlist() {
-  serverWatchlist.forEach((item) => {
-    if (Math.random() > 0.4) return; // 40% tick probability
-    
-    const config = PAIRS_CONFIG_WS[item.symbol];
-    const pipScale = item.symbol.includes('JPY') ? 0.005 : 0.00005;
-    const diff = (Math.random() - 0.5) * pipScale;
-    const newPrice = item.price + diff;
-    
-    item.price = parseFloat(newPrice.toFixed(config.pipDecimal + 1));
-    item.high = parseFloat(Math.max(item.high, newPrice).toFixed(config.pipDecimal + 1));
-    item.low = parseFloat(Math.min(item.low, newPrice).toFixed(config.pipDecimal + 1));
-  });
+/** Live source dispatcher: Twelve Data first, Yahoo as a per-symbol fallback. */
+async function fetchRealLatestPrices() {
+  if (tdApiKey) {
+    const applied = await fetchTwelveDataQuotes();
+    // Any instrument Twelve Data didn't cover (invalid key, rate limit, or a
+    // plan without metals) is fetched from Yahoo so the feed never goes stale.
+    const remaining = serverWatchlist.filter((i) => !applied.has(i.symbol));
+    if (remaining.length > 0) {
+      await fetchYahooPricesFor(remaining);
+    }
+    return;
+  }
+  await fetchYahooPricesFor(serverWatchlist);
 }
+
+/** Twelve Data WebSocket stream: low-latency ticks (WS credits, not API credits). */
+let tdWs: WebSocket | null = null;
+let tdWsReconnectTimer: NodeJS.Timeout | null = null;
+let tdWsHeartbeatTimer: NodeJS.Timeout | null = null;
+let tdWsLastPriceAt = 0;
+
+function startTwelveDataStream() {
+  if (!tdApiKey || tdWs || process.env.VERCEL) return;
+  try {
+    tdWs = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${tdApiKey}`);
+    tdWs.on('open', () => {
+      console.log('[TwelveData] WebSocket stream connected.');
+      tdWs?.send(JSON.stringify({ action: 'subscribe', params: { symbols: Object.values(TD_SYMBOLS).join(',') } }));
+      tdWsHeartbeatTimer = setInterval(() => {
+        try { tdWs?.send(JSON.stringify({ action: 'heartbeat' })); } catch { /* ignore */ }
+      }, 10_000);
+    });
+    tdWs.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.event === 'price' && msg.symbol && msg.price) {
+          const key = Object.keys(TD_SYMBOLS).find((k) => TD_SYMBOLS[k] === msg.symbol);
+          const item = key ? serverWatchlist.find((i) => i.symbol === key) : undefined;
+          if (key && item) {
+            const price = parseFloat(msg.price);
+            if (isFinite(price) && price > 0) {
+              const config = PAIRS_CONFIG_WS[key];
+              item.price = parseFloat(price.toFixed(config.pipDecimal + 1));
+              item.high = Math.max(item.high, item.price);
+              item.low = item.low > 0 ? Math.min(item.low, item.price) : item.price;
+              tdWsLastPriceAt = Date.now();
+              broadcastPrices();
+            }
+          }
+        }
+        // `subscribe-status` events are informational; ignore them.
+      } catch { /* ignore malformed frames */ }
+    });
+    tdWs.on('error', (err) => {
+      console.warn('[TwelveData] WebSocket error:', (err as Error).message || 'connection failed');
+    });
+    tdWs.on('close', () => {
+      console.warn('[TwelveData] WebSocket closed — REST polling fallback is active.');
+      if (tdWsHeartbeatTimer) { clearInterval(tdWsHeartbeatTimer); tdWsHeartbeatTimer = null; }
+      tdWs = null;
+      scheduleTdWsReconnect();
+    });
+  } catch (e) {
+    console.warn('[TwelveData] WebSocket setup failed:', (e as Error).message);
+    tdWs = null;
+    scheduleTdWsReconnect();
+  }
+}
+
+function scheduleTdWsReconnect() {
+  if (tdWsReconnectTimer) clearTimeout(tdWsReconnectTimer);
+  tdWsReconnectTimer = setTimeout(() => {
+    tdWsReconnectTimer = null;
+    startTwelveDataStream();
+  }, 10_000);
+}
+
+/** One full Twelve Data sync cycle (REST quote + per-symbol Yahoo fallback + broadcast). */
+let tdSyncInFlight = false;
+async function tdSyncOnce() {
+  if (tdSyncInFlight) return;
+  tdSyncInFlight = true;
+  try {
+    const applied = await fetchTwelveDataQuotes();
+    const remaining = serverWatchlist.filter((i) => !applied.has(i.symbol));
+    if (remaining.length > 0) await fetchYahooPricesFor(remaining);
+    broadcastPrices();
+  } finally {
+    tdSyncInFlight = false;
+  }
+}
+
+/** Twelve Data historical candles for a symbol/timeframe, or null to fall back to Yahoo. */
+const TD_INTERVALS: Record<string, string> = {
+  '1m': '1min', '5m': '5min', '15m': '15min', '1H': '1h', '4H': '4h', 'D': '1day',
+};
+async function fetchTwelveDataHistory(symbol: string, timeframe: string) {
+  if (!tdApiKey) return null;
+  const tdInterval = TD_INTERVALS[timeframe];
+  const tdSymbol = TD_SYMBOLS[symbol];
+  if (!tdInterval || !tdSymbol) return null;
+  try {
+    const res = await fetch(
+      `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&outputsize=800&timezone=UTC&order=asc&apikey=${tdApiKey}`
+    );
+    const raw = await res.json();
+    if (raw?.status === 'error' || raw?.code || !Array.isArray(raw.values)) {
+      console.warn('[TwelveData] time_series error:', raw?.message || raw?.code || 'no values');
+      return null;
+    }
+    const candles = raw.values
+      .map((v: any) => {
+        const time = Date.parse(`${String(v.datetime).replace(' ', 'T')}Z`) / 1000;
+        const open = parseFloat(v.open);
+        const high = parseFloat(v.high);
+        const low = parseFloat(v.low);
+        const close = parseFloat(v.close);
+        if (!isFinite(time) || !isFinite(open) || !isFinite(high) || !isFinite(low) || !isFinite(close) || open <= 0) return null;
+        return { time, open, high, low, close, volume: Math.floor(parseFloat(v.volume) || 0) };
+      })
+      .filter((c: any) => c !== null);
+    if (candles.length === 0) return null;
+    return { success: true, symbol, timeframe, data: candles };
+  } catch (e) {
+    console.warn('[TwelveData] time_series fetch failed:', (e as Error).message);
+    return null;
+  }
+}
+
+
 
 function broadcastPrices() {
   const payload = JSON.stringify({
@@ -128,18 +306,24 @@ if (!process.env.VERCEL) {
     broadcastPrices();
   });
 
-  // Sync real latest quotes every 30 seconds
-  setInterval(() => {
-    fetchRealLatestPrices().then(() => {
-      broadcastPrices();
-    });
-  }, 30000);
-
-  // Start server micro-ticking loop every 2 seconds
-  setInterval(() => {
-    tickServerWatchlist();
-    broadcastPrices();
-  }, 2000);
+  if (tdApiKey) {
+    // Primary low-latency feed: Twelve Data WebSocket ticks.
+    startTwelveDataStream();
+    // Slow REST refresh for OHLC/change (8 API credits per full watchlist sync).
+    setInterval(tdSyncOnce, TD_QUOTE_SYNC_MS);
+    // REST polling fallback whenever the WebSocket is not delivering ticks.
+    setInterval(() => {
+      const stale = Date.now() - tdWsLastPriceAt > 30_000;
+      if (stale || !tdWs) tdSyncOnce();
+    }, TD_POLL_MS);
+  } else {
+    // No Twelve Data key: Yahoo Finance is the single live source, polled every 5s.
+    setInterval(() => {
+      fetchRealLatestPrices().then(() => {
+        broadcastPrices();
+      });
+    }, 5000);
+  }
 }
 
 wss.on('connection', (ws) => {
@@ -219,7 +403,7 @@ app.get('/api/forex', async (req, res) => {
   } catch (error: any) {
     res.json({
       success: false,
-      error: error.message || 'Failed to fetch live rates, falling back to simulator',
+      error: error.message || 'Failed to fetch live rates',
     });
   }
 });
@@ -261,6 +445,13 @@ app.get('/api/market/history', async (req, res) => {
     };
 
     const ticker = symbolsMap[symbol as string] || `${symbol}=X`;
+
+    // Twelve Data is the primary history source when an API key is configured;
+    // fall through to Yahoo Finance on any failure.
+    if (tdApiKey) {
+      const tdResult = await fetchTwelveDataHistory(symbol as string, timeframe as string);
+      if (tdResult) return res.json(tdResult);
+    }
 
     // Map timeframe to Yahoo Finance interval and range
     let interval = '1h';

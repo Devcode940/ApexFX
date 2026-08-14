@@ -1,14 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import {
-  formatPrice,
-  getContractSize,
-  computeSMA,
-  computeRSI,
-  calculateVolatilityDetails,
-  generateHistoricalData,
-  detectPatterns,
-  generateSignal,
-} from './forexData';
+import type { Candlestick } from '../types';
+/** Deterministic candles for unit tests only (never used in the app). */
+function makeCandles(count: number, startPrice = 1.08): Candlestick[] {
+  const out: Candlestick[] = [];
+  let price = startPrice;
+  const base = 1_700_000_000;
+  for (let i = 0; i < count; i++) {
+    const open = price;
+    const close = price + Math.sin(i * 0.7) * 0.0008;
+    const high = Math.max(open, close) + 0.0004;
+    const low = Math.min(open, close) - 0.0004;
+    out.push({ time: base + i * 3600, open, high, low, close, volume: 1000 });
+    price = close;
+  }
+  return out;
+}
+import { formatPrice, getContractSize, computeSMA, computeRSI, calculateVolatilityDetails, detectPatterns, generateSignal } from './forexData';
 
 describe('formatPrice', () => {
   it('formats forex pairs with 5 decimals', () => {
@@ -41,7 +48,7 @@ describe('getContractSize', () => {
 
 describe('computeSMA', () => {
   it('returns null during warmup and the correct average after', () => {
-    const data = generateHistoricalData('EURUSD', '1H', 30);
+    const data = makeCandles(30);
     const sma = computeSMA(data, 20);
     expect(sma[0]).toBeNull();
     expect(sma[19]).not.toBeNull();
@@ -52,7 +59,7 @@ describe('computeSMA', () => {
 
 describe('computeRSI', () => {
   it('stays within the 0-100 band', () => {
-    const data = generateHistoricalData('EURUSD', '1H', 60);
+    const data = makeCandles(60);
     const rsi = computeRSI(data, 14).filter((v): v is number => v !== null);
     expect(rsi.length).toBeGreaterThan(0);
     rsi.forEach((v) => {
@@ -64,7 +71,7 @@ describe('computeRSI', () => {
 
 describe('calculateVolatilityDetails', () => {
   it('classifies a range explosion as HIGH against a calm baseline', () => {
-    const data = generateHistoricalData('EURUSD', '1H', 30);
+    const data = makeCandles(30);
     const last = data[data.length - 1];
     // Latest candle explodes in range: ATR spikes relative to prior candles
     data[data.length - 1] = { ...last, high: last.high + 0.5, low: last.low - 0.5 };
@@ -79,7 +86,7 @@ describe('calculateVolatilityDetails', () => {
 
 describe('detectPatterns', () => {
   it('scans generated candles without throwing and returns typed results', () => {
-    const data = generateHistoricalData('EURUSD', '1H', 120);
+    const data = makeCandles(120);
     const patterns = detectPatterns(data);
     expect(Array.isArray(patterns)).toBe(true);
     patterns.forEach((p) => {
@@ -91,7 +98,7 @@ describe('detectPatterns', () => {
 
 describe('generateSignal', () => {
   it('returns a bounded signal with sane tp/sl when a direction is given', () => {
-    const data = generateHistoricalData('EURUSD', '1H', 60);
+    const data = makeCandles(60);
     const signal = generateSignal(
       'EURUSD',
       '1H',

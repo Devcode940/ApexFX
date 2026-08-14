@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { NewsItem } from '../types';
 import { Globe, HeartHandshake, RefreshCw, AlertTriangle, Loader2 } from 'lucide-react';
-import { CURRENT_NEWS } from '../utils/forexData';
+
 
 import { useTrading } from '../context/TradingContext';
 
@@ -18,7 +18,7 @@ interface FinnhubNewsItem {
 
 export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
   const { selectedSymbol } = useTrading();
-  const [news, setNews] = useState<NewsItem[]>(CURRENT_NEWS);
+  const [news, setNews] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,8 +64,8 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
           setNews(formattedNews);
         }
       } catch (err: any) {
-        console.warn("Using mock news data:", err.message);
-        setError("Using mock data. " + (err.message || 'Configure FINNHUB_API_KEY in secrets to see live news.'));
+        console.warn("Live news feed unavailable:", err.message);
+        setError(err.message || 'Configure FINNHUB_API_KEY in secrets to see live news.');
       } finally {
         setLoading(false);
       }
@@ -107,7 +107,7 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
         <div className="flex items-center gap-2">
           {loading && <Loader2 className="w-3 h-3 text-emerald-400 animate-spin" />}
           <span className="text-[10px] bg-zinc-800 text-zinc-400 font-mono px-2 py-0.5 rounded font-semibold uppercase">
-            {error ? 'Simulated Feed' : 'Live Feed'}
+            {error ? 'Unavailable' : 'Live Feed'}
           </span>
         </div>
       </div>

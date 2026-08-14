@@ -50,6 +50,7 @@ function TradingTerminal() {
     utcTime,
     liveQuote,
     activeData,
+    activePatterns,
     currentPrice,
     volatility,
     priceRange,
@@ -126,7 +127,7 @@ function TradingTerminal() {
               <span className={`w-1.5 h-1.5 rounded-full ${
                 wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-500'
               }`} />
-              <span className="font-sans text-xs uppercase tracking-tight">{wsConnected ? 'LIVE' : 'SIM'}</span>
+              <span className="font-sans text-xs uppercase tracking-tight">{wsConnected ? 'LIVE' : 'POLL'}</span>
             </div>
           </div>
         </div>
@@ -300,7 +301,13 @@ function TradingTerminal() {
 
           {/* Core Visual Chart pane */}
           {activeData.length > 0 ? (
-            <TradingChart />
+            <TradingChart
+              data={activeData}
+              symbol={selectedSymbol}
+              timeframe={selectedTimeframe}
+              patterns={activePatterns}
+              indicators={indicators}
+            />
           ) : (
             <div className="w-full h-[620px] rounded-lg border border-zinc-800 bg-zinc-950 flex items-center justify-center text-zinc-500 font-mono text-xs">
               Initializing Forex charting buffer...

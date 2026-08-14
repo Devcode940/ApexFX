@@ -196,7 +196,7 @@ export const PerformanceDashboard: React.FC = () => {
       if (!dur && t.openedAt && t.closedAt) {
         dur = t.closedAt - t.openedAt;
       }
-      if (!dur) dur = 3600000; // default 1 hr fallback for legacy mock
+      if (!dur) dur = 3600000; // default 1 hr fallback
 
       totalDurationMs += dur;
       durationCount++;
@@ -345,17 +345,6 @@ export const PerformanceDashboard: React.FC = () => {
 
     return [initialPoint, ...points];
   }, [filteredClosedTrades]);
-
-  // Quick simulation triggers to verify dynamic updates
-  const handleSimulateWin = () => {
-    handleOpenPosition('BUY', 0.5);
-    setTimeout(() => {
-      const target = positions[0];
-      if (target) {
-        handleClosePosition(target.id);
-      }
-    }, 1000);
-  };
 
   const handleExportCSV = () => {
     const headers = ['Trade ID', 'Symbol', 'Type', 'Entry Price', 'Exit Price', 'Amount', 'PnL ($)', 'Time', 'Duration'];

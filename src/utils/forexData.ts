@@ -1,26 +1,14 @@
 import { Candlestick, Timeframe, WatchlistItem, TechnicalIndicatorsState, Pattern, TradingSignal, NewsItem } from '../types';
 
-// Pseudo-random generator for stable data
-export function createRandom(seed: string) {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
-  }
-  return function() {
-    h = Math.imul(h ^ 123456789, 214013) + 2531011 | 0;
-    return (h >>> 16 & 0x7fff) / 32768; // returns [0, 1)
-  };
-}
-
-export const PAIRS_CONFIG: Record<string, { name: string; basePrice: number; pipDecimal: number; spreadPips: number }> = {
-  'EURUSD': { name: 'EUR / USD', basePrice: 1.08520, pipDecimal: 4, spreadPips: 1.2 },
-  'GBPUSD': { name: 'GBP / USD', basePrice: 1.27150, pipDecimal: 4, spreadPips: 1.6 },
-  'USDJPY': { name: 'USD / JPY', basePrice: 155.350, pipDecimal: 2, spreadPips: 1.4 },
-  'AUDUSD': { name: 'AUD / USD', basePrice: 0.66450, pipDecimal: 4, spreadPips: 1.5 },
-  'USDCAD': { name: 'USD / CAD', basePrice: 1.36780, pipDecimal: 4, spreadPips: 1.8 },
-  'GBPJPY': { name: 'GBP / JPY', basePrice: 198.150, pipDecimal: 2, spreadPips: 2.3 },
-  'XAUUSD': { name: 'Gold / USD', basePrice: 2325.40, pipDecimal: 2, spreadPips: 2.5 },
-  'XAGUSD': { name: 'Silver / USD', basePrice: 29.350, pipDecimal: 3, spreadPips: 2.0 },
+export const PAIRS_CONFIG: Record<string, { name: string; pipDecimal: number; spreadPips: number }> = {
+  'EURUSD': { name: 'EUR / USD', pipDecimal: 4, spreadPips: 1.2 },
+  'GBPUSD': { name: 'GBP / USD', pipDecimal: 4, spreadPips: 1.6 },
+  'USDJPY': { name: 'USD / JPY', pipDecimal: 2, spreadPips: 1.4 },
+  'AUDUSD': { name: 'AUD / USD', pipDecimal: 4, spreadPips: 1.5 },
+  'USDCAD': { name: 'USD / CAD', pipDecimal: 4, spreadPips: 1.8 },
+  'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2, spreadPips: 2.3 },
+  'XAUUSD': { name: 'Gold / USD', pipDecimal: 2, spreadPips: 2.5 },
+  'XAGUSD': { name: 'Silver / USD', pipDecimal: 3, spreadPips: 2.0 },
 };
 
 // Contract size (base units per lot) per instrument. Forex standard lot = 100,000 units;
@@ -56,54 +44,7 @@ export const TIME_CONFIG: Record<Timeframe, { label: string; offsetSec: number }
 };
 
 // Generates starting dataset for pairs
-export function generateHistoricalData(symbol: string, timeframe: Timeframe, count = 180): Candlestick[] {
-  const config = PAIRS_CONFIG[symbol] || { name: symbol, basePrice: 1.000, pipDecimal: 4, spreadPips: 1.5 };
-  const rand = createRandom(symbol + '_' + timeframe);
-  const timeOffset = TIME_CONFIG[timeframe].offsetSec;
 
-  let price = config.basePrice;
-  const list: Candlestick[] = [];
-
-  // Anchor ending time near current timestamp (e.g. now minus a small lag)
-  let currentTime = Math.floor(Date.now() / 1000) - (count * timeOffset);
-
-  // Volatility scale depending on timeframe
-  let volScale = 0.0006;
-  if (timeframe === '1m') volScale = 0.00015;
-  else if (timeframe === '5m') volScale = 0.00025;
-  else if (timeframe === '15m') volScale = 0.00035;
-  else if (timeframe === '1H') volScale = 0.0008;
-  else if (timeframe === '4H') volScale = 0.0015;
-  else if (timeframe === 'D') volScale = 0.0045;
-
-  if (symbol.includes('JPY')) {
-    volScale *= 100; // Japanese Yen pip scale adjustments
-  }
-
-  for (let i = 0; i < count; i++) {
-    const trendFactor = Math.sin(i / 15) * 0.4 + (rand() - 0.5) * 2; // subtle waves
-    const delta = price * volScale * trendFactor;
-    const open = price;
-    const close = price + delta;
-
-    const high = Math.max(open, close) + (rand() * volScale * price * 0.4);
-    const low = Math.min(open, close) - (rand() * volScale * price * 0.4);
-
-    list.push({
-      time: currentTime,
-      open: parseFloat(open.toFixed(config.pipDecimal + 1)),
-      high: parseFloat(high.toFixed(config.pipDecimal + 1)),
-      low: parseFloat(low.toFixed(config.pipDecimal + 1)),
-      close: parseFloat(close.toFixed(config.pipDecimal + 1)),
-      volume: Math.floor(rand() * 10000 + 1500)
-    });
-
-    price = close;
-    currentTime += timeOffset;
-  }
-
-  return list;
-}
 
 // Indicator computations
 export function computeSMA(data: Candlestick[], period = 20): (number | null)[] {
@@ -791,93 +732,22 @@ export function generateSignal(
   };
 }
 
-// Watchlist default creation and random tick updater simulation
-export function generateDefaultWatchlist(): WatchlistItem[] {
-  return Object.keys(PAIRS_CONFIG).map(symbol => {
+// Watchlist default creation. Prices are zeroed until the live feed delivers
+// the first real quote (arrives within seconds of connecting).
+export function createWatchlistFromConfig(): WatchlistItem[] {
+  return (Object.keys(PAIRS_CONFIG) as (keyof typeof PAIRS_CONFIG)[]).map((symbol) => {
     const config = PAIRS_CONFIG[symbol];
-    const rand = Math.random();
-    const change = (rand - 0.5) * 1.2;
-    const price = config.basePrice * (1 + change / 100);
-    const range = price * 0.005;
     return {
-      symbol,
+      symbol: String(symbol),
       name: config.name,
-      price: parseFloat(price.toFixed(config.pipDecimal + 1)),
-      change: parseFloat(change.toFixed(2)),
-      high: parseFloat((price + range * (0.3 + rand * 0.5)).toFixed(config.pipDecimal + 1)),
-      low: parseFloat((price - range * (0.3 + Math.random() * 0.7)).toFixed(config.pipDecimal + 1)),
+      price: 0,
+      high: 0,
+      low: 0,
+      change: 0,
       spread: config.spreadPips,
     };
   });
 }
 
-// Simulate a ticking price update for watchlist and active chart
-export function simulatePriceTick(item: WatchlistItem): WatchlistItem {
-  const config = PAIRS_CONFIG[item.symbol] || { pipDecimal: 4 };
-  const changePercent = (Math.random() - 0.5) * 0.15; // small ticks
-  const diff = item.price * changePercent * 0.01;
 
-  const newPrice = item.price + diff;
-  const priceMax = Math.max(item.high, newPrice);
-  const priceMin = Math.min(item.low, newPrice);
 
-  // Compute percentage changes
-  const basePrice = PAIRS_CONFIG[item.symbol].basePrice;
-  const newChange = ((newPrice - basePrice) / basePrice) * 100;
-
-  return {
-    ...item,
-    price: parseFloat(newPrice.toFixed(config.pipDecimal + 1)),
-    high: parseFloat(priceMax.toFixed(config.pipDecimal + 1)),
-    low: parseFloat(priceMin.toFixed(config.pipDecimal + 1)),
-    change: parseFloat(newChange.toFixed(2)),
-  };
-}
-
-export const CURRENT_NEWS: NewsItem[] = [
-  {
-    id: 'news_1',
-    time: '5m ago',
-    impact: 'HIGH',
-    title: 'FOMC Meeting Minutes Show Fed Reluctant to Cut Interest Rates Quickly',
-    source: 'Bloomberg',
-    sentiment: 'bearish',
-    affectedPairs: ['EURUSD', 'GBPUSD', 'AUDUSD'],
-  },
-  {
-    id: 'news_2',
-    time: '25m ago',
-    impact: 'HIGH',
-    title: 'Bank of Japan Signals Possible Quantitative Tightening to Prop Up Weak Yen',
-    source: 'Reuters',
-    sentiment: 'bullish',
-    affectedPairs: ['USDJPY', 'GBPJPY'],
-  },
-  {
-    id: 'news_3',
-    time: '1h ago',
-    impact: 'MEDIUM',
-    title: 'Eurozone Inflation Cools Down to 2.4%, Matching Estimates',
-    source: 'Financial Times',
-    sentiment: 'neutral',
-    affectedPairs: ['EURUSD'],
-  },
-  {
-    id: 'news_4',
-    time: '3h ago',
-    impact: 'MEDIUM',
-    title: 'UK Retail Sales Surge by 1.2% in May, Beating British Consensus',
-    source: 'Sky News',
-    sentiment: 'bullish',
-    affectedPairs: ['GBPUSD', 'GBPJPY'],
-  },
-  {
-    id: 'news_5',
-    time: '5h ago',
-    impact: 'LOW',
-    title: 'Canadian Crude Exports Suffer Pipeline Bottleneck Near Key Sea Terminals',
-    source: 'Energy Intelligence',
-    sentiment: 'bearish',
-    affectedPairs: ['USDCAD'],
-  }
-];

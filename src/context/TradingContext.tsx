@@ -11,12 +11,9 @@ import {
   LiveQuote
 } from '../types';
 import {
-  generateDefaultWatchlist,
-  generateHistoricalData,
-  simulatePriceTick,
+  createWatchlistFromConfig,
   detectPatterns,
   generateSignal,
-  PAIRS_CONFIG,
   calculateVolatilityDetails,
   getContractSize,
   VolatilityDetails
@@ -108,7 +105,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [selectedSymbol, setSelectedSymbol] = useState<string>('EURUSD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1H');
   const [chartData, setChartData] = useState<Record<string, Record<string, Candlestick[]>>>({});
-  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => generateDefaultWatchlist());
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => createWatchlistFromConfig());
   const [indicators, setIndicators] = useState<TechnicalIndicatorsState>(() => {
     const cached = localStorage.getItem('forexinsight_preferred_indicators');
     if (cached) {
@@ -177,7 +174,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return [];
   });
 
-  // Closed trades history (Read from LocalStorage or seed defaults)
+  // Closed trades history (Read from LocalStorage or empty — no demo data)
   const [closedTrades, setClosedTrades] = useState<ClosedTrade[]>(() => {
     const cached = localStorage.getItem('forexinsight_closed_trades');
     if (cached) {
@@ -185,132 +182,10 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch (e) {
-        // Fallback to default
+        // Ignore corrupted cache
       }
     }
-    const now = Date.now();
-    return [
-      {
-        id: 'seed_trade_1',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'EURUSD',
-        type: 'BUY',
-        entryPrice: 1.0820,
-        exitPrice: 1.0865,
-        amount: 0.5,
-        pnl: 225.00,
-        time: '11:45:12',
-        closeReason: 'TP Hit',
-        openedAt: now - 3600000 * 26,
-        closedAt: now - 3600000 * 24,
-        durationMs: 3600000 * 2, // 2 hours
-      },
-      {
-        id: 'seed_trade_2',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'GBPUSD',
-        type: 'BUY',
-        entryPrice: 1.2640,
-        exitPrice: 1.2695,
-        amount: 0.3,
-        pnl: 165.00,
-        time: '09:20:00',
-        closeReason: 'TP Hit',
-        openedAt: now - 3600000 * 20,
-        closedAt: now - 3600000 * 18.5,
-        durationMs: 3600000 * 1.5, // 1.5 hours
-      },
-      {
-        id: 'seed_trade_3',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'USDJPY',
-        type: 'SELL',
-        entryPrice: 154.80,
-        exitPrice: 155.15,
-        amount: 0.4,
-        pnl: -91.00,
-        time: '08:15:30',
-        closeReason: 'SL Hit',
-        openedAt: now - 3600000 * 16,
-        closedAt: now - 3600000 * 15.2,
-        durationMs: 3600000 * 0.8, // 48 mins
-      },
-      {
-        id: 'seed_trade_4',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'XAUUSD',
-        type: 'BUY',
-        entryPrice: 2380.50,
-        exitPrice: 2394.20,
-        amount: 0.2,
-        pnl: 274.00,
-        time: '14:02:10',
-        closeReason: 'TP Hit',
-        openedAt: now - 3600000 * 12,
-        closedAt: now - 3600000 * 11.2,
-        durationMs: 3600000 * 0.8, // 48 mins
-      },
-      {
-        id: 'seed_trade_5',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'EURUSD',
-        type: 'SELL',
-        entryPrice: 1.0870,
-        exitPrice: 1.0840,
-        amount: 0.5,
-        pnl: 150.00,
-        time: '16:30:00',
-        closeReason: 'Manual',
-        openedAt: now - 3600000 * 8,
-        closedAt: now - 3600000 * 7.1,
-        durationMs: 3600000 * 0.9, // 54 mins
-      },
-      {
-        id: 'seed_trade_6',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'AUDUSD',
-        type: 'BUY',
-        entryPrice: 0.6520,
-        exitPrice: 0.6505,
-        amount: 0.6,
-        pnl: -90.00,
-        time: '17:10:45',
-        closeReason: 'SL Hit',
-        openedAt: now - 3600000 * 6,
-        closedAt: now - 3600000 * 5.5,
-        durationMs: 3600000 * 0.5, // 30 mins
-      },
-      {
-        id: 'seed_trade_7',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'GBPUSD',
-        type: 'SELL',
-        entryPrice: 1.2710,
-        exitPrice: 1.2660,
-        amount: 0.4,
-        pnl: 200.00,
-        time: '19:05:00',
-        closeReason: 'TP Hit',
-        openedAt: now - 3600000 * 4,
-        closedAt: now - 3600000 * 2.8,
-        durationMs: 3600000 * 1.2, // 1 hour 12 mins
-      },
-      {
-        id: 'seed_trade_8',
-        isSample: true, // seeded demo data, not a real trade
-        symbol: 'USDCHF',
-        type: 'BUY',
-        entryPrice: 0.8950,
-        exitPrice: 0.8985,
-        amount: 0.3,
-        pnl: 105.00,
-        time: '21:15:20',
-        closeReason: 'Manual',
-        openedAt: now - 3600000 * 2,
-        closedAt: now - 3600000 * 1.2,
-        durationMs: 3600000 * 0.8, // 48 mins
-      }
-    ];
+    return [];
   });
 
   // Watchlist Tick Visual Flashes state
@@ -396,7 +271,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
           });
         }
       } catch (err) {
-        console.warn('Real forex rates API not available or failed. Falling back to high-fidelity simulated prices.', err);
+        console.warn('Live forex rates API unavailable; prices will come from the real-time feed once it connects.', err);
       }
     };
     fetchRealRates();
@@ -553,8 +428,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
               }
             }));
           } else {
-            console.warn('Real history failed or empty. Falling back to high-fidelity simulated chart data.');
-            const fallbackHistory = generateHistoricalData(selectedSymbol, selectedTimeframe, 200);
+            console.warn('Real history failed or empty.');
+            const fallbackHistory = [];
             setChartData((prev) => ({
               ...prev,
               [selectedSymbol]: {
@@ -567,7 +442,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } catch (err) {
         console.error('Failed to fetch historical data:', err);
         if (active) {
-          const fallbackHistory = generateHistoricalData(selectedSymbol, selectedTimeframe, 200);
+          const fallbackHistory = [];
           setChartData((prev) => ({
             ...prev,
             [selectedSymbol]: {
@@ -590,31 +465,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
   }, [selectedSymbol, selectedTimeframe]);
 
-  // --- Central Dynamic Price Ticking simulation loop ---
-  useEffect(() => {
-    if (wsConnected) return; // Bypass if live WebSocket is streaming rates
-
-    const interval = setInterval(() => {
-      const prevItems = watchlistRef.current;
-      const nextTickStates: Record<string, 'up' | 'down' | 'none'> = {};
-      const updatedList = prevItems.map((item) => {
-        // 40% probability of tick occurring per timer interval
-        if (Math.random() > 0.4) {
-          nextTickStates[item.symbol] = 'none';
-          return item;
-        }
-
-        const ticked = simulatePriceTick(item);
-        nextTickStates[item.symbol] = ticked.price > item.price ? 'up' : 'down';
-        return ticked;
-      });
-
-      setWatchlistItems(updatedList);
-      setTickStates(nextTickStates);
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [wsConnected]);
+  // --- Central Dynamic Price Ticking loop ---
 
   // Clear tick flashes shortly after they appear (driven by state, not updater side-effects)
   useEffect(() => {
@@ -640,8 +491,17 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [watchlistItems, selectedSymbol]);
 
   const currentPrice = useMemo(() => {
-    return activeWatchItem?.price || PAIRS_CONFIG[selectedSymbol]?.basePrice || 1;
-  }, [activeWatchItem, selectedSymbol]);
+    // Prefer the live quote; fall back to the latest real close from history.
+    // Never fabricate a placeholder price.
+    if (activeWatchItem && activeWatchItem.price > 0) {
+      return activeWatchItem.price;
+    }
+    const series = chartData[selectedSymbol]?.[selectedTimeframe];
+    if (series && series.length > 0) {
+      return series[series.length - 1].close;
+    }
+    return 0;
+  }, [activeWatchItem, selectedSymbol, chartData, selectedTimeframe]);
 
   useEffect(() => {
     if (activeData.length === 0) return;

@@ -17,6 +17,7 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
     startTransition,
     mobileTab,
     setMobileTab,
+    wsConnected,
   } = useTrading();
 
   const onSelectSymbol = (sym: string) => {
@@ -108,15 +109,17 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
         })}
       </div>
 
-      {/* Mini details summary */}
+      {/* Live feed status (real data only) */}
       <div className="p-3 bg-zinc-900/45 border-t border-zinc-800 text-[11px] text-zinc-500 space-y-1 font-mono">
         <div className="flex justify-between">
-          <span>Global Latency:</span>
-          <span>~12ms</span>
+          <span>Feed:</span>
+          <span className={wsConnected ? 'text-emerald-400' : 'text-amber-500'}>
+            {wsConnected ? 'WebSocket LIVE' : 'HTTP Polling'}
+          </span>
         </div>
         <div className="flex justify-between">
-          <span>Spread Cost:</span>
-          <span>Competitive</span>
+          <span>Source:</span>
+          <span>Yahoo Finance</span>
         </div>
       </div>
     </div>

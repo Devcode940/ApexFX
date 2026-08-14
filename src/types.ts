@@ -95,7 +95,6 @@ export interface ClosedTrade {
   openedAt?: number; // epoch ms
   closedAt?: number; // epoch ms
   durationMs?: number; // duration in ms
-  isSample?: boolean; // seeded demo data, not a real user trade
 }
 
 export interface LiveQuote {
