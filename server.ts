@@ -382,6 +382,54 @@ if (apiKey) {
   });
 }
 
+// OpenRouter: alternative AI provider (OpenAI-compatible). When OPENROUTER_API_KEY
+// is set, /api/chat routes through OpenRouter instead of Gemini.
+const OPENROUTER_KEY_CANDIDATE = process.env.OPENROUTER_API_KEY;
+// Only treat OpenRouter as configured when the key looks like a real OpenRouter
+// key (sk-or-v1-...). Placeholders/truncated values are ignored so the app falls
+// back to Gemini instead of failing on a bad key.
+const openRouterApiKey = OPENROUTER_KEY_CANDIDATE?.startsWith('sk-or-') ? OPENROUTER_KEY_CANDIDATE : undefined;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/auto';
+
+/** Convert Gemini-style contents [{role, parts:[{text}|{inlineData}]}] to OpenAI chat messages. */
+function toOpenRouterMessages(contents: any[]) {
+  return contents.map((c) => {
+    const content: any[] = [];
+    for (const part of c.parts || []) {
+      if (part?.text) content.push({ type: 'text', text: part.text });
+      else if (part?.inlineData?.data) {
+        content.push({
+          type: 'image_url',
+          image_url: { url: `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}` },
+        });
+      }
+    }
+    return { role: c.role === 'user' ? 'user' : 'assistant', content };
+  });
+}
+
+/** Generate a chat completion via OpenRouter (OpenAI-compatible chat completions API). */
+async function generateOpenRouter(system: string, contents: any[]) {
+  const messages = [{ role: 'system', content: system }, ...toOpenRouterMessages(contents)];
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${openRouterApiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': process.env.APP_URL || 'https://localhost:3000',
+      'X-Title': 'ApexFX',
+    },
+    body: JSON.stringify({ model: OPENROUTER_MODEL, messages, max_tokens: 1024 }),
+  });
+  if (!res.ok) {
+    throw new Error(`OpenRouter error ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (typeof text !== 'string') throw new Error('OpenRouter returned no response text.');
+  return text;
+}
+
 // 1. REAL DATA API: Live rates fetched from public Frankfurter API
 app.get('/api/forex', async (req, res) => {
   try {
@@ -627,9 +675,9 @@ app.post('/api/chat', async (req, res) => {
   try {
     const { messages, selectedSymbol, selectedTimeframe, activeSignal } = req.body;
 
-    if (!ai) {
+    if (!ai && !openRouterApiKey) {
       return res.status(500).json({
-        error: 'GEMINI_API_KEY environment variable is not configured. Please set it in Settings > Secrets.',
+        error: 'No AI provider configured. Set OPENROUTER_API_KEY or GEMINI_API_KEY in Settings > Secrets.',
       });
     }
 
@@ -698,24 +746,33 @@ Provide professional, accurate, and insightful trading or analysis answers. Use 
       contents[0].role = 'user';
     }
 
-    const result = await Promise.race([
-      ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents,
-        config: { systemInstruction: contextStr },
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Gemini request timed out after ${CHAT_TIMEOUT_MS / 1000}s.`)), CHAT_TIMEOUT_MS)
-      ),
-    ]);
+    let text: string;
+    if (openRouterApiKey) {
+      text = await Promise.race([
+        generateOpenRouter(contextStr, contents),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`OpenRouter request timed out after ${CHAT_TIMEOUT_MS / 1000}s.`)), CHAT_TIMEOUT_MS)
+        ),
+      ]);
+    } else {
+      const result = await Promise.race([
+        ai!.models.generateContent({
+          model: 'gemini-3.5-flash',
+          contents,
+          config: { systemInstruction: contextStr },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Gemini request timed out after ${CHAT_TIMEOUT_MS / 1000}s.`)), CHAT_TIMEOUT_MS)
+        ),
+      ]);
+      text = result.text || "I apologize, but I couldn't generate a response. Please try again.";
+    }
 
-    res.json({
-      text: result.text || "I apologize, but I couldn't generate a response. Please try again.",
-    });
+    res.json({ text });
   } catch (error: any) {
-    console.error('Gemini error:', error);
+    console.error('AI error:', error);
     res.status(500).json({
-      error: error.message || 'An error occurred while communicating with Gemini.',
+      error: error.message || 'An error occurred while communicating with the AI provider.',
     });
   }
 });

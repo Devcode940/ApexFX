@@ -2,7 +2,7 @@
 
 ApexFX Terminal is a high-performance, next-generation **multi-confluence Forex and Commodity trading workstation**. Designed with desktop-first precision and responsive mobile adapters, this full-stack terminal provides professional traders with live quotes, real historical interactive charting, dynamic volatility risk indicators, and real-time AI-powered confluence analytics.
 
-> **Data integrity:** the terminal serves **real market data only**. There is no synthetic price generator, no placeholder quotes, and no seeded demo trades. All prices, candles, news, and AI analysis come from live upstream sources (Twelve Data, Yahoo Finance, ECB/Frankfurter, Finnhub, Gemini); the only static values are instrument metadata (pip decimals, contract sizes, nominal spreads) and locally computed indicators, patterns, and paper-trade P&L.
+> **Data integrity:** the terminal serves **real market data only**. There is no synthetic price generator, no placeholder quotes, and no seeded demo trades. All prices, candles, news, and AI analysis come from live upstream sources (Twelve Data, Yahoo Finance, ECB/Frankfurter, Finnhub, Gemini/OpenRouter); the only static values are instrument metadata (pip decimals, contract sizes, nominal spreads) and locally computed indicators, patterns, and paper-trade P&L.
 
 ---
 
@@ -27,7 +27,7 @@ ApexFX Terminal is a high-performance, next-generation **multi-confluence Forex 
 * **Chart snapshots**: one-click screenshot copied to clipboard and attachable to the AI assistant.
 
 ### 3. Integrated AI Assistant
-* **Real Gemini engine** (`gemini-3.5-flash` via `@google/genai`): built-in chat container with recent conversation history (server caps at the last 30 messages), chart-image understanding, and automatic market context injection (active symbol, timeframe, latest signal, indicators).
+* **Real AI engine — Gemini or OpenRouter**: built-in chat container with recent conversation history (server caps at the last 30 messages), chart-image understanding, and automatic market context injection (active symbol, timeframe, latest signal, indicators). Uses `gemini-3.5-flash` via `@google/genai` by default; setting `OPENROUTER_API_KEY` routes chat through OpenRouter instead (`OPENROUTER_MODEL`, default `openrouter/auto`).
 * **Server-side hardening**: in-memory rate limiting, payload size caps, history truncation, and a 45s request timeout.
 * **No canned fallbacks**: if the AI service is unavailable, the terminal surfaces the real error instead of fabricating an offline answer.
 
@@ -44,7 +44,7 @@ ApexFX Terminal is a high-performance, next-generation **multi-confluence Forex 
 
 * **Frontend**: React 19, Vite 6, Tailwind CSS v4, lightweight-charts v5, Lucide Icons, Recharts, Motion animations.
 * **Backend**: Express.js on Node.js with a native WebSocket server (`ws`).
-* **APIs & Data**: Twelve Data (WebSocket ticks + REST quotes + history), Yahoo Finance REST API (fallback quotes + history), Frankfurter (ECB rates), Finnhub (news), ForexRate API, Google Gemini API.
+* **APIs & Data**: Twelve Data (WebSocket ticks + REST quotes + history), Yahoo Finance REST API (fallback quotes + history), Frankfurter (ECB rates), Finnhub (news), ForexRate API, Google Gemini API / OpenRouter (AI).
 * **Quality**: TypeScript with strict type checking (`npm run lint`), Vitest unit tests (`npm run test`).
 
 ---
@@ -61,12 +61,17 @@ Create a `.env` file at the root of the project (using `.env.example` as a templ
 ```env
 PORT=3000
 GEMINI_API_KEY=your_gemini_api_key_here
+# Alternative AI provider — set either GEMINI_API_KEY or OPENROUTER_API_KEY
+OPENROUTER_API_KEY=your_openrouter_key_here
+OPENROUTER_MODEL=openrouter/auto
 TWELVEDATA_API_KEY=your_twelvedata_key_here  # recommended — primary live feed
 FINNHUB_API_KEY=your_finnhub_api_key_here    # optional — live news
 FOREXRATE_API_KEY=your_forexrate_key_here    # optional — rate cross-check
+VITE_SUPABASE_URL=your_supabase_project_url  # optional — account sync
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-`GEMINI_API_KEY` is required for the AI assistant. **Adding `TWELVEDATA_API_KEY` makes Twelve Data the primary live market source** (WebSocket ticks + history). Without it, the market feed falls back to Yahoo Finance — quotes and history work with **no keys at all**.
+The AI assistant needs **`GEMINI_API_KEY` or `OPENROUTER_API_KEY`**. **Adding `TWELVEDATA_API_KEY` makes Twelve Data the primary live market source** (WebSocket ticks + history). Without it, the market feed falls back to Yahoo Finance — quotes and history work with **no keys at all**. `FINNHUB_API_KEY` enables the news feed, `FOREXRATE_API_KEY` the rate cross-check, and `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` the account/trade sync (auth + push/pull of positions and closed trades).
 
 > **Twelve Data credits:** the REST `/quote` endpoint costs 1 API credit per symbol (8 for the full watchlist). The OHLC/change sync defaults to **15 min** (`TWELVEDATA_QUOTE_SYNC_MS=900000`), which uses ~96 credits/day — safe for the free tier (8 credits/min, 800/day). Paid plans can lower it for fresher high/low/change; the WebSocket stream covers tick-level updates at no API credit cost. Tune with `TWELVEDATA_QUOTE_SYNC_MS` / `TWELVEDATA_POLL_MS`. When Twelve Data returns `429` (per-minute limit reached), REST sync pauses until the next minute instead of hammering the API; the WebSocket stream keeps delivering ticks. Symbols outside the plan (e.g. `XAG/USD` → `403`) automatically fall back per-symbol to Yahoo.
 
@@ -111,7 +116,7 @@ All endpoints return JSON and are safe to call from Postman, `curl`, or any HTTP
 | `/api/market/news?category=forex` | GET | Macro news headlines (Finnhub) | `FINNHUB_API_KEY` |
 | `/api/market/quote?symbol=EUR/USD` | GET | Real-time quote cross-check (Twelve Data) | `TWELVEDATA_API_KEY` |
 | `/api/market/forexrate?base=USD` | GET | Rate cross-check (ForexRate API) | `FOREXRATE_API_KEY` |
-| `/api/chat` | POST | Gemini AI analysis — body: `{ messages, selectedSymbol, selectedTimeframe, activeSignal }` | `GEMINI_API_KEY` |
+| `/api/chat` | POST | AI analysis — body: `{ messages, selectedSymbol, selectedTimeframe, activeSignal }` (OpenRouter when its key is set, else Gemini) | `OPENROUTER_API_KEY` or `GEMINI_API_KEY` |
 
 **WebSocket**: connect to `ws://localhost:3000` — receives `INITIAL_RATES` on open, then `PRICE_UPDATE` messages every ~5 seconds.
 
@@ -120,7 +125,7 @@ All endpoints return JSON and are safe to call from Postman, `curl`, or any HTTP
 ## 📂 Project Architecture
 
 ```text
-├── server.ts                  # Full-stack backend (Yahoo/Frankfurter proxies, WS feed, Gemini chat, rate limiting)
+├── server.ts                  # Full-stack backend (Twelve Data/Yahoo proxies, WS feed, Gemini/OpenRouter chat, rate limiting)
 ├── package.json               # Scripts and dependencies
 ├── supabase-schema.sql        # Optional Supabase schema for position/trade sync
 ├── src/
