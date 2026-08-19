@@ -130,7 +130,8 @@ async function fetchYahooPricesFor(items: typeof serverWatchlist) {
     'XAGUSD': 'SI=F',
   };
 
-  for (const item of items) {
+  // Fetch in parallel so a serverless cold start doesn't serialize 8 upstream calls.
+  await Promise.all(items.map(async (item) => {
     try {
       const ticker = symbolsMap[item.symbol] || `${item.symbol}=X`;
       const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`, {
@@ -156,7 +157,7 @@ async function fetchYahooPricesFor(items: typeof serverWatchlist) {
     } catch (e) {
       console.error(`Failed to fetch real price for ${item.symbol}:`, e);
     }
-  }
+  }));
 }
 
 /** Live source dispatcher: Twelve Data first, Yahoo as a per-symbol fallback. */
@@ -430,20 +431,33 @@ app.get('/api/forex', async (req, res) => {
 });
 
 // Watchlist Live Prices API Endpoint (HTTP Fallback)
-app.get('/api/market/prices', (req, res) => {
-  res.json({
-    success: true,
-    rates: serverWatchlist.reduce((acc, item) => {
-      acc[item.symbol] = {
-        price: item.price,
-        high: item.high,
-        low: item.low,
-        change: item.change,
-      };
-      return acc;
-    }, {} as Record<string, any>),
-    timestamp: new Date().toISOString()
-  });
+let lastPriceFetchTs = 0;
+const PRICE_FETCH_CACHE_MS = 4000;
+app.get('/api/market/prices', async (req, res) => {
+  try {
+    // On serverless (Vercel) the streaming loop doesn't run, so the watchlist is
+    // only filled on demand. Use a short TTL cache and the free Yahoo path (not
+    // Twelve Data) so each client poll request doesn't drain REST credits.
+    if (process.env.VERCEL && Date.now() - lastPriceFetchTs > PRICE_FETCH_CACHE_MS) {
+      await fetchYahooPricesFor(serverWatchlist);
+      lastPriceFetchTs = Date.now();
+    }
+    res.json({
+      success: true,
+      rates: serverWatchlist.reduce((acc, item) => {
+        acc[item.symbol] = {
+          price: item.price,
+          high: item.high,
+          low: item.low,
+          change: item.change,
+        };
+        return acc;
+      }, {} as Record<string, any>),
+      timestamp: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(502).json({ error: 'Failed to fetch market prices', detail: (e as Error).message });
+  }
 });
 
 // 4. REAL HISTORICAL CHART DATA API (Yahoo Finance)
