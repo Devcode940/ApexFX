@@ -68,7 +68,7 @@ FOREXRATE_API_KEY=your_forexrate_key_here    # optional — rate cross-check
 
 `GEMINI_API_KEY` is required for the AI assistant. **Adding `TWELVEDATA_API_KEY` makes Twelve Data the primary live market source** (WebSocket ticks + history). Without it, the market feed falls back to Yahoo Finance — quotes and history work with **no keys at all**.
 
-> **Twelve Data credits:** the REST `/quote` endpoint costs 1 API credit per symbol (8 for the full watchlist). On the free tier (8 credits/min, 800/day) keep the OHLC/change sync at ≥ 60s — the default. The WebSocket stream uses separate WebSocket credits (1 per symbol, not API credits) and is the recommended low-latency feed. Tune with `TWELVEDATA_QUOTE_SYNC_MS` / `TWELVEDATA_POLL_MS`. When Twelve Data returns `429` (per-minute limit reached), REST sync pauses until the next minute instead of hammering the API; the WebSocket stream keeps delivering ticks. Symbols outside the plan (e.g. `XAG/USD` → `403`) automatically fall back per-symbol to Yahoo.
+> **Twelve Data credits:** the REST `/quote` endpoint costs 1 API credit per symbol (8 for the full watchlist). The OHLC/change sync defaults to **15 min** (`TWELVEDATA_QUOTE_SYNC_MS=900000`), which uses ~96 credits/day — safe for the free tier (8 credits/min, 800/day). Paid plans can lower it for fresher high/low/change; the WebSocket stream covers tick-level updates at no API credit cost. Tune with `TWELVEDATA_QUOTE_SYNC_MS` / `TWELVEDATA_POLL_MS`. When Twelve Data returns `429` (per-minute limit reached), REST sync pauses until the next minute instead of hammering the API; the WebSocket stream keeps delivering ticks. Symbols outside the plan (e.g. `XAG/USD` → `403`) automatically fall back per-symbol to Yahoo.
 
 ### Installation
 

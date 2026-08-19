@@ -57,8 +57,11 @@ const tdApiKey = process.env.TWELVEDATA_API_KEY;
 // at no API credit cost.
 let tdRESTCooldownUntil = 0;
 // REST quote costs 1 API credit per symbol (8 for the full watchlist). Free tier
-// allows 8 credits/minute and 800/day, so the REST OHLC/change sync is slow.
-const TD_QUOTE_SYNC_MS = Number(process.env.TWELVEDATA_QUOTE_SYNC_MS) || 60_000;
+// allows 8 credits/minute and 800/day. Default the OHLC/change sync to 15 min
+// (8 credits per call = ~96/day, well under the 800/day cap); the WebSocket
+// stream covers tick-level updates at no API credit cost. Paid plans can lower
+// this via TWELVEDATA_QUOTE_SYNC_MS.
+const TD_QUOTE_SYNC_MS = Number(process.env.TWELVEDATA_QUOTE_SYNC_MS) || 900_000;
 // REST polling interval used when the WebSocket stream is not delivering ticks.
 const TD_POLL_MS = Number(process.env.TWELVEDATA_POLL_MS) || 15_000;
 
