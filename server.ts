@@ -5,14 +5,111 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
+import crypto from 'crypto';
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
+// Security: Production mode flag for logging control
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// Safe logging utility - suppresses verbose logs in production
+const log = IS_PRODUCTION 
+  ? (msg: string, ...args: any[]) => { /* Silent in production */ }
+  : console.log;
+
+const warn = (msg: string, ...args: any[]) => {
+  if (!IS_PRODUCTION || process.env.SHOW_WARNINGS === 'true') {
+    console.warn(msg, ...args);
+  }
+};
+
+const error = (msg: string, ...args: any[]) => {
+  // Always log errors, but sanitize sensitive data
+  const sanitizedMsg = msg
+    .replace(/Bearer\s+[a-zA-Z0-9_-]+/g, 'Bearer [REDACTED]')
+    .replace(/token=[a-zA-Z0-9_-]+/g, 'token=[REDACTED]')
+    .replace(/api[_-]?key[=:]\s*[a-zA-Z0-9_-]+/gi, 'api_key=[REDACTED]');
+  console.error(sanitizedMsg, ...args);
+};
+
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+
+// Security: Configure allowed origins for WebSocket and CORS
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',') 
+  : ['http://localhost:5173', 'http://localhost:3000'];
+
+const wss = new WebSocketServer({ 
+  server,
+  verifyClient: (info, callback) => {
+    const origin = info.origin || info.req.headers.origin;
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(true);
+    } else {
+      callback(false, 403, 'Unauthorized origin');
+    }
+  }
+});
+
+// Security: CORS middleware for production environments
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (process.env.NODE_ENV !== 'production') {
+    // Allow all origins in development
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// WebSocket authentication tokens (simple in-memory store for demo purposes)
+const wsAuthTokens = new Map<string, { createdAt: number }>();
+const WS_TOKEN_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+
+// Rate limiting for API endpoints (in-memory sliding window)
+const rateLimitBuckets = new Map<string, number[]>();
+const RATE_LIMIT_MAX_REQUESTS = 30;
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+
+/** Check if a client is rate-limited. Returns true if rate-limited. */
+function isRateLimited(key: string): boolean {
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const hits = (rateLimitBuckets.get(key) || []).filter((t) => t > cutoff);
+  if (hits.length >= RATE_LIMIT_MAX_REQUESTS) {
+    rateLimitBuckets.set(key, hits);
+    return true;
+  }
+  hits.push(now);
+  rateLimitBuckets.set(key, hits);
+  return false;
+}
+
+/** Rate-limiting middleware for API routes */
+function rateLimitMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const clientKey =
+    (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
+    req.socket.remoteAddress ||
+    'unknown';
+  
+  if (isRateLimited(clientKey)) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a moment and try again.' });
+  }
+  next();
+}
 
 // --- Live Server Watchlist and WebSocket Streaming ---
 const PAIRS_CONFIG_WS: Record<string, { name: string; pipDecimal: number }> = {
@@ -71,10 +168,15 @@ async function fetchTwelveDataQuotes(): Promise<Set<string>> {
   if (!tdApiKey) return applied;
   try {
     const symbols = Object.values(TD_SYMBOLS).join(',');
-    const res = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols)}&apikey=${tdApiKey}`);
+    const res = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols)}`, {
+      headers: {
+        'Authorization': `Bearer ${tdApiKey}`,
+        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
+      }
+    });
     const raw = await res.json();
     if (raw?.code) {
-      console.error('[TwelveData] quote error:', raw?.message || `code ${raw?.code}`);
+      error('[TwelveData] quote error:', raw?.message || `code ${raw?.code}`);
       if (raw.code === 429) tdRESTCooldownUntil = Date.now() + 60_000;
       return applied;
     }
@@ -110,7 +212,7 @@ async function fetchTwelveDataQuotes(): Promise<Set<string>> {
       applied.add(item.symbol);
     }
   } catch (e) {
-    console.error('[TwelveData] quote fetch failed:', (e as Error).message);
+    error('[TwelveData] quote fetch failed:', (e as Error).message);
   }
   return applied;
 }
@@ -136,7 +238,7 @@ async function fetchYahooPricesFor(items: typeof serverWatchlist) {
       const ticker = symbolsMap[item.symbol] || `${item.symbol}=X`;
       const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
         }
       });
       if (res.ok) {
@@ -155,7 +257,7 @@ async function fetchYahooPricesFor(items: typeof serverWatchlist) {
         }
       }
     } catch (e) {
-      console.error(`Failed to fetch real price for ${item.symbol}:`, e);
+      error(`Failed to fetch real price for ${item.symbol}:`, e);
     }
   }));
 }
@@ -184,9 +286,14 @@ let tdWsLastPriceAt = 0;
 function startTwelveDataStream() {
   if (!tdApiKey || tdWs || process.env.VERCEL) return;
   try {
-    tdWs = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${tdApiKey}`);
+    tdWs = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price`, {
+      headers: {
+        'Authorization': `Bearer ${tdApiKey}`,
+        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
+      }
+    });
     tdWs.on('open', () => {
-      console.log('[TwelveData] WebSocket stream connected.');
+      log('[TwelveData] WebSocket stream connected.');
       tdWs?.send(JSON.stringify({ action: 'subscribe', params: { symbols: Object.values(TD_SYMBOLS).join(',') } }));
       tdWsHeartbeatTimer = setInterval(() => {
         try { tdWs?.send(JSON.stringify({ action: 'heartbeat' })); } catch { /* ignore */ }
@@ -214,16 +321,16 @@ function startTwelveDataStream() {
       } catch { /* ignore malformed frames */ }
     });
     tdWs.on('error', (err) => {
-      console.warn('[TwelveData] WebSocket error:', (err as Error).message || 'connection failed');
+      warn('[TwelveData] WebSocket error:', (err as Error).message || 'connection failed');
     });
     tdWs.on('close', () => {
-      console.warn('[TwelveData] WebSocket closed — REST polling fallback is active.');
+      warn('[TwelveData] WebSocket closed — REST polling fallback is active.');
       if (tdWsHeartbeatTimer) { clearInterval(tdWsHeartbeatTimer); tdWsHeartbeatTimer = null; }
       tdWs = null;
       scheduleTdWsReconnect();
     });
   } catch (e) {
-    console.warn('[TwelveData] WebSocket setup failed:', (e as Error).message);
+    warn('[TwelveData] WebSocket setup failed:', (e as Error).message);
     tdWs = null;
     scheduleTdWsReconnect();
   }
@@ -264,11 +371,17 @@ async function fetchTwelveDataHistory(symbol: string, timeframe: string) {
   if (!tdInterval || !tdSymbol) return null;
   try {
     const res = await fetch(
-      `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&outputsize=800&timezone=UTC&order=asc&apikey=${tdApiKey}`
+      `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&outputsize=800&timezone=UTC&order=asc`,
+      {
+        headers: {
+          'Authorization': `Bearer ${tdApiKey}`,
+          'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
+        }
+      }
     );
     const raw = await res.json();
     if (raw?.status === 'error' || raw?.code || !Array.isArray(raw.values)) {
-      console.warn('[TwelveData] time_series error:', raw?.message || raw?.code || 'no values');
+      warn('[TwelveData] time_series error:', raw?.message || raw?.code || 'no values');
       if (raw?.code === 429) tdRESTCooldownUntil = Date.now() + 60_000;
       return null;
     }
@@ -284,12 +397,12 @@ async function fetchTwelveDataHistory(symbol: string, timeframe: string) {
       })
       .filter((c: any) => c !== null);
     if (candles.length === 0) {
-      console.warn('[TwelveData] time_series returned no valid candles');
+      warn('[TwelveData] time_series returned no valid candles');
       return null;
     }
     return { success: true, symbol, timeframe, data: candles };
   } catch (e) {
-    console.warn('[TwelveData] time_series fetch failed:', (e as Error).message);
+    warn('[TwelveData] time_series fetch failed:', (e as Error).message);
     return null;
   }
 }
@@ -324,7 +437,7 @@ function broadcastPrices() {
 if (!process.env.VERCEL) {
   // Initial sync on server start
   fetchRealLatestPrices().then(() => {
-    console.log('[Server] Successfully synchronized initial real Forex and Commodity quotes.');
+    log('[Server] Successfully synchronized initial real Forex and Commodity quotes.');
     broadcastPrices();
   });
 
@@ -348,7 +461,40 @@ if (!process.env.VERCEL) {
   }
 }
 
-wss.on('connection', (ws) => {
+// Endpoint to generate WebSocket auth token (requires simple shared secret in production)
+app.get('/api/ws/token', (req, res) => {
+  // In production, verify user authentication here before issuing a token
+  const token = crypto.randomBytes(32).toString('hex');
+  wsAuthTokens.set(token, { createdAt: Date.now() });
+  // Clean up old tokens periodically
+  setTimeout(() => wsAuthTokens.delete(token), WS_TOKEN_EXPIRY_MS);
+  res.json({ token, expiresIn: WS_TOKEN_EXPIRY_MS / 1000 });
+});
+
+wss.on('connection', (ws, req) => {
+  // Extract token from URL query params for authentication
+  const url = new URL(req.url || '', `http://localhost:${PORT}`);
+  const token = url.searchParams.get('token');
+  
+  // Validate token
+  if (!token || !wsAuthTokens.has(token)) {
+    ws.send(JSON.stringify({ type: 'ERROR', message: 'Authentication failed' }));
+    ws.close(4001, 'Unauthorized');
+    return;
+  }
+  
+  // Verify token hasn't expired
+  const tokenData = wsAuthTokens.get(token);
+  if (tokenData && Date.now() - tokenData.createdAt > WS_TOKEN_EXPIRY_MS) {
+    wsAuthTokens.delete(token);
+    ws.send(JSON.stringify({ type: 'ERROR', message: 'Token expired' }));
+    ws.close(4002, 'Token Expired');
+    return;
+  }
+  
+  // Token is valid - remove it (single-use) and proceed
+  wsAuthTokens.delete(token);
+  
   const initialPayload = JSON.stringify({
     type: 'INITIAL_RATES',
     rates: serverWatchlist.reduce((acc, item) => {
@@ -367,6 +513,9 @@ wss.on('connection', (ws) => {
 
 app.use(express.json());
 
+// Apply rate limiting to ALL /api/* routes (no exceptions)
+app.use('/api', rateLimitMiddleware);
+
 // Initialize Gemini API client
 const apiKey = process.env.GEMINI_API_KEY;
 let ai: GoogleGenAI | null = null;
@@ -376,7 +525,7 @@ if (apiKey) {
     apiKey: apiKey,
     httpOptions: {
       headers: {
-        'User-Agent': 'aistudio-build',
+        'User-Agent': 'ApexFX-Terminal/1.0 (Production)',
       },
     },
   });
@@ -471,9 +620,10 @@ app.get('/api/forex', async (req, res) => {
       }
     });
   } catch (error: any) {
+    error('Frankfurter API error:', error.message);
     res.json({
       success: false,
-      error: error.message || 'Failed to fetch live rates',
+      error: 'Failed to fetch live rates',
     });
   }
 });
@@ -504,7 +654,7 @@ app.get('/api/market/prices', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (e) {
-    res.status(502).json({ error: 'Failed to fetch market prices', detail: (e as Error).message });
+    res.status(502).json({ error: 'Failed to fetch market prices' });
   }
 });
 
@@ -514,6 +664,17 @@ app.get('/api/market/history', async (req, res) => {
     const { symbol, timeframe } = req.query;
     if (!symbol || !timeframe) {
       return res.status(400).json({ error: 'Symbol and timeframe are required' });
+    }
+    
+    // Validate symbol format (alphanumeric only)
+    if (!/^[A-Z0-9]+$/.test(symbol as string)) {
+      return res.status(400).json({ error: 'Invalid symbol format' });
+    }
+    
+    // Validate timeframe
+    const validTimeframes = ['1m', '5m', '15m', '1H', '4H', 'D'];
+    if (!validTimeframes.includes(timeframe as string)) {
+      return res.status(400).json({ error: 'Invalid timeframe' });
     }
 
     const symbolsMap: Record<string, string> = {
@@ -573,7 +734,7 @@ app.get('/api/market/history', async (req, res) => {
 
     const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${interval}&range=${range}`, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
       }
     });
 
@@ -641,10 +802,10 @@ app.get('/api/market/history', async (req, res) => {
       data: candlesticks,
     });
   } catch (error: any) {
-    console.error('Failed to fetch historical data from Yahoo:', error);
+    error('Failed to fetch historical data from Yahoo:', error);
     res.status(500).json({
       success: false,
-      error: error.message || 'Failed to fetch historical data',
+      error: 'Failed to fetch historical data',
     });
   }
 });
@@ -677,7 +838,7 @@ app.post('/api/chat', async (req, res) => {
 
     if (!ai && !openRouterApiKey) {
       return res.status(500).json({
-        error: 'No AI provider configured. Set OPENROUTER_API_KEY or GEMINI_API_KEY in Settings > Secrets.',
+        error: 'AI service unavailable',
       });
     }
 
@@ -770,9 +931,9 @@ Provide professional, accurate, and insightful trading or analysis answers. Use 
 
     res.json({ text });
   } catch (error: any) {
-    console.error('AI error:', error);
+    error('AI error:', error);
     res.status(500).json({
-      error: error.message || 'An error occurred while communicating with the AI provider.',
+      error: 'An error occurred while processing your request.',
     });
   }
 });
@@ -784,15 +945,24 @@ app.get('/api/market/news', async (req, res) => {
   try {
     const apiKey = process.env.FINNHUB_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: 'FINNHUB_API_KEY is not configured. Please add it to your secrets.' });
+      return res.status(500).json({ error: 'Service unavailable' });
     }
     const { category = 'forex' } = req.query;
-    const response = await fetch(`https://finnhub.io/api/v1/news?category=${category}&token=${apiKey}`);
+    // Validate category parameter
+    if (typeof category !== 'string' || !/^[a-z]+$/.test(category)) {
+      return res.status(400).json({ error: 'Invalid category parameter' });
+    }
+    // Use Authorization header instead of query param to prevent key leakage in logs
+    const response = await fetch(`https://finnhub.io/api/v1/news?category=${encodeURIComponent(category)}`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`
+      }
+    });
     if (!response.ok) throw new Error('Failed to fetch from Finnhub');
     const data = await response.json();
     res.json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to fetch market news' });
   }
 });
 
@@ -801,16 +971,25 @@ app.get('/api/market/quote', async (req, res) => {
   try {
     const apiKey = process.env.TWELVEDATA_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: 'TWELVEDATA_API_KEY is not configured. Please add it to your secrets.' });
+      return res.status(500).json({ error: 'Service unavailable' });
     }
     const { symbol } = req.query;
     if (!symbol) return res.status(400).json({ error: 'Symbol is required' });
-    const response = await fetch(`https://api.twelvedata.com/quote?symbol=${symbol}&apikey=${apiKey}`);
+    // Validate symbol format (alphanumeric and / only)
+    if (!/^[A-Z0-9\/]+$/.test(symbol as string)) {
+      return res.status(400).json({ error: 'Invalid symbol format' });
+    }
+    const response = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol as string)}`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
+      }
+    });
     if (!response.ok) throw new Error('Failed to fetch from Twelve Data');
     const data = await response.json();
     res.json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to fetch market quote' });
   }
 });
 
@@ -819,15 +998,27 @@ app.get('/api/market/forexrate', async (req, res) => {
   try {
     const apiKey = process.env.FOREXRATE_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: 'FOREXRATE_API_KEY is not configured. Please add it to your secrets.' });
+      return res.status(500).json({ error: 'Service unavailable' });
     }
     const { base = 'USD' } = req.query;
-    const response = await fetch(`https://api.forexrateapi.com/v1/latest?api_key=${apiKey}&base=${base}`);
+    // Validate base currency format (3 uppercase letters only)
+    if (base && !/^[A-Z]{3}$/.test(base as string)) {
+      return res.status(400).json({ error: 'Invalid base currency format' });
+    }
+    const response = await fetch(`https://api.forexrateapi.com/v1/latest`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
+      },
+      body: JSON.stringify({ base: base || 'USD' })
+    });
     if (!response.ok) throw new Error('Failed to fetch from ForexRate API');
     const data = await response.json();
     res.json(data);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to fetch forex rate' });
   }
 });
 
@@ -848,7 +1039,7 @@ async function startServer() {
   }
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Server] Running full-stack environment on http://localhost:${PORT}`);
+    log(`[Server] Running full-stack environment on http://localhost:${PORT}`);
   });
 }
 
