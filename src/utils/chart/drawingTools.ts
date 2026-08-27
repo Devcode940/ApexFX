@@ -7,16 +7,9 @@ import type {
   RiskRewardDrawing,
   TrendlineDrawing,
 } from '../../types/chart';
+import { EMPTY_DRAWINGS } from '../../types/chart';
 
 const STORAGE_PREFIX = 'forexinsight_drawings_';
-
-export const EMPTY_DRAWINGS: DrawingsState = {
-  horizontalLines: [],
-  trendlines: [],
-  annotations: [],
-  riskRewards: [],
-  fibonacci: [],
-};
 
 export function loadDrawings(symbol: string): DrawingsState {
   try {

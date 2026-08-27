@@ -77,7 +77,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
 
   const getPipMultiplier = (symbol: string) => {
     if (symbol.includes('JPY')) return 100;
-    if (symbol.includes('XAG')) return 1000;
+    if (symbol.includes('XAG')) return 10000;
     if (symbol.includes('XAU')) return 100;
     return 10000;
   };

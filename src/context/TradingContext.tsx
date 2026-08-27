@@ -290,7 +290,11 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const update = rates[item.symbol];
         if (update) {
           const priceDiff = update.price - item.price;
-          nextTickStates[item.symbol] = priceDiff > 0 ? 'up' : (priceDiff < 0 ? 'down' : 'none');
+          if (item.price === 0) {
+            nextTickStates[item.symbol] = 'none';
+          } else {
+            nextTickStates[item.symbol] = priceDiff > 0 ? 'up' : (priceDiff < 0 ? 'down' : 'none');
+          }
           return {
             ...item,
             price: update.price,
@@ -339,6 +343,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     const connect = () => {
+      if (cancelled) return;
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}`;
@@ -364,7 +369,9 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ws.onclose = () => {
           setWsConnected(false);
           startPolling();
-          reconnectTimeout = setTimeout(connect, 5000);
+          if (!cancelled) {
+            reconnectTimeout = setTimeout(connect, 5000);
+          }
         };
 
         ws.onerror = (err) => {
@@ -374,15 +381,20 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } catch (err) {
         console.warn('[WebSocket] Setup failed:', err);
         startPolling();
-        reconnectTimeout = setTimeout(connect, 5000);
+        if (!cancelled) {
+          reconnectTimeout = setTimeout(connect, 5000);
+        }
       }
     };
+
+    let cancelled = false;
 
     connect();
     // Start polling immediately so that we have live prices even if WebSocket is blocked or connecting
     startPolling();
 
     return () => {
+      cancelled = true;
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (pollingInterval) clearInterval(pollingInterval);
@@ -429,12 +441,11 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
             }));
           } else {
             console.warn('Real history failed or empty.');
-            const fallbackHistory = [];
             setChartData((prev) => ({
               ...prev,
               [selectedSymbol]: {
                 ...(prev[selectedSymbol] || {}),
-                [selectedTimeframe]: fallbackHistory,
+                [selectedTimeframe]: [],
               }
             }));
           }
@@ -442,12 +453,11 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } catch (err) {
         console.error('Failed to fetch historical data:', err);
         if (active) {
-          const fallbackHistory = [];
           setChartData((prev) => ({
             ...prev,
             [selectedSymbol]: {
               ...(prev[selectedSymbol] || {}),
-              [selectedTimeframe]: fallbackHistory,
+              [selectedTimeframe]: [],
             }
           }));
         }

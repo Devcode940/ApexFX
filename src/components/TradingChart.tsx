@@ -44,7 +44,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   patterns,
   indicators,
 }) => {
-  const { theme: globalTheme, positions, closedTrades, handleChartSnapshot } = useTrading();
+  const { theme: globalTheme, positions, closedTrades, handleChartSnapshot, handleToggleIndicator } = useTrading();
   const theme: ChartTheme = globalTheme === 'light' ? 'light' : 'dark';
 
   // --- Price Streak (consecutive candles) ---
@@ -269,10 +269,9 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
     setEnabledSessions((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  const handleToggleIndicator = useCallback((key: keyof TechnicalIndicatorsState) => {
-    // handled via context in the original; local indicator toggles are driven by the parent
-    // eslint-disable-next-line no-console
-  }, []);
+  const handleToggleIndicatorLocal = useCallback((key: keyof TechnicalIndicatorsState) => {
+    handleToggleIndicator(key);
+  }, [handleToggleIndicator]);
 
   const handleFitContent = useCallback(() => {
     chartRef.current?.timeScale().fitContent();
@@ -353,7 +352,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
             theme={theme}
             symbol={symbol}
             indicators={indicators}
-            onToggleIndicator={() => {}}
+            onToggleIndicator={handleToggleIndicatorLocal}
             isRsiMinimized={isRsiMinimized}
             setIsRsiMinimized={setIsRsiMinimized}
             isMacdMinimized={isMacdMinimized}
@@ -396,7 +395,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
               onClose={() => setShowChartSidebar(false)}
               symbol={symbol}
               indicators={indicators}
-              onToggleIndicator={() => {}}
+              onToggleIndicator={handleToggleIndicatorLocal}
               patterns={patterns}
               visibleChartPatterns={visibleChartPatterns}
               highlightedPattern={highlightedPattern}

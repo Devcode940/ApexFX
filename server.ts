@@ -23,7 +23,7 @@ const PAIRS_CONFIG_WS: Record<string, { name: string; pipDecimal: number }> = {
   'USDCAD': { name: 'USD / CAD', pipDecimal: 4 },
   'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2 },
   'XAUUSD': { name: 'Gold / USD', pipDecimal: 2 },
-  'XAGUSD': { name: 'Silver / USD', pipDecimal: 3 },
+  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4 },
 };
 
 // Watchlist starts empty (no placeholder/fake prices); real quotes are filled
@@ -455,7 +455,7 @@ app.get('/api/forex', async (req, res) => {
     const audRates = r.AUD ? parseFloat((1 / r.AUD).toFixed(5)) : null;
     const jpyRates = r.JPY ? parseFloat(r.JPY.toFixed(3)) : null;
     const cadRates = r.CAD ? parseFloat(r.CAD.toFixed(5)) : null;
-    const chfRates = r.CHF ? parseFloat(r.CHF.toFixed(5)) : null;
+    const gbpjpyRates = (r.GBP && r.JPY) ? parseFloat((r.JPY / r.GBP).toFixed(3)) : null;
 
     res.json({
       success: true,
@@ -467,7 +467,7 @@ app.get('/api/forex', async (req, res) => {
         USDJPY: jpyRates,
         AUDUSD: audRates,
         USDCAD: cadRates,
-        USDCHF: chfRates,
+        GBPJPY: gbpjpyRates,
       }
     });
   } catch (error: any) {
@@ -661,6 +661,10 @@ function isChatRateLimited(key: string): boolean {
   const now = Date.now();
   const cutoff = now - CHAT_WINDOW_MS;
   const hits = (chatRateBuckets.get(key) || []).filter((t) => t > cutoff);
+  if (hits.length === 0) {
+    chatRateBuckets.delete(key);
+    return false;
+  }
   if (hits.length >= CHAT_MAX_PER_WINDOW) {
     chatRateBuckets.set(key, hits);
     return true;

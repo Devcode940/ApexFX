@@ -82,7 +82,7 @@ export const ChartHeader: React.FC<ChartHeaderProps> = ({
 
         {/* Quick Timeframe Bar */}
         <div className="hidden lg:flex items-center gap-1 bg-zinc-950/60 p-1 rounded border border-zinc-800/60 text-[10px] font-mono font-bold">
-          {(['1m', '5m', '15m', '1h', '4h', '1d'] as Timeframe[]).map((tf) => (
+          {(['1m', '5m', '15m', '1H', '4H', 'D'] as Timeframe[]).map((tf) => (
             <button
               key={tf}
               type="button"

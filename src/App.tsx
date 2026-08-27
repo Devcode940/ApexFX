@@ -207,7 +207,7 @@ function TradingTerminal() {
           <div className="text-right font-mono flex items-center gap-3">
             <div>
               <span className="text-[9px] text-zinc-500 uppercase block leading-none">Internal Bid</span>
-              <span className="text-xs font-bold text-zinc-100">{formatPrice(currentPrice, selectedSymbol)}</span>
+              <span className="text-xs font-bold text-zinc-100">{currentPrice > 0 ? formatPrice(currentPrice, selectedSymbol) : '—'}</span>
             </div>
             {liveQuote && (
               <>
