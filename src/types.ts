@@ -56,6 +56,12 @@ export interface Pattern {
   indicatorsConfirm?: string[];
 }
 
+export interface SignalBreakdownItem {
+  name: string;
+  status: 'bullish' | 'bearish' | 'neutral';
+  detail?: string;
+}
+
 export interface TradingSignal {
   type: 'BUY' | 'SELL' | 'NEUTRAL';
   symbol: string;
@@ -66,6 +72,8 @@ export interface TradingSignal {
   confidence: number; // 0 to 100
   time: string;
   rationale: string[];
+  breakdown?: SignalBreakdownItem[]; // structured sentiment, not parsed from strings
+  disclaimer?: string;
 }
 
 export interface TradePosition {

@@ -567,6 +567,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
 }
 
 // Generate algorithmic signals based on latest indicators and patterns
+// Returns structured breakdown to avoid brittle string parsing in UI
 export function generateSignal(
   symbol: string,
   timeframe: Timeframe,
@@ -574,7 +575,7 @@ export function generateSignal(
   indicators: TechnicalIndicatorsState,
   precomputedPatterns?: Pattern[]
 ): TradingSignal {
-  const currentPrice = data[data.length - 1]?.close || 1.000;
+  const currentPrice = data[data.length - 1]?.close || 1.0;
   const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
 
   if (data.length === 0) {
@@ -587,7 +588,9 @@ export function generateSignal(
       sl: currentPrice,
       confidence: 50,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      rationale: ['Loading market data...']
+      rationale: ['Loading market data...'],
+      breakdown: [],
+      disclaimer: 'Heuristic estimate — not financial advice. Pattern win rates are not backtested.',
     };
   }
 
@@ -596,12 +599,9 @@ export function generateSignal(
   const rsi = computeRSI(data, 14);
   const macdData = computeMACD(data);
   const bb = computeBollingerBands(data, 20, 2);
-  // Reuse patterns already computed by the caller to avoid a duplicate
-  // full indicator sweep on every price tick.
   const patterns = precomputedPatterns ?? detectPatterns(data);
 
-  // Default values
-  let buyScore = 50; // starts neutral
+  let buyScore = 50;
   const rationale: string[] = [];
 
   const latestSma = sma[sma.length - 1];
@@ -609,85 +609,112 @@ export function generateSignal(
   const latestRsi = rsi[rsi.length - 1];
   const latestMacdHist = macdData.histogram[macdData.histogram.length - 1];
   const latestMacdLine = macdData.macd[macdData.macd.length - 1];
-  const latestMacdBbUpper = bb.upper[bb.upper.length - 1];
-  const latestMacdBbLower = bb.lower[bb.lower.length - 1];
+  const latestBbUpper = bb.upper[bb.upper.length - 1];
+  const latestBbLower = bb.lower[bb.lower.length - 1];
 
-  // 1. Moving Averages crossover
+  // Structured breakdown for UI — avoids parsing rationale strings
+  const breakdown: { name: string; status: 'bullish' | 'bearish' | 'neutral'; detail?: string }[] = [];
+
+  // 1. MA crossover
   if (latestSma && latestEma) {
     if (latestSma > latestEma) {
       buyScore += 12;
       rationale.push(`Bullish crossover: 20 SMA (${latestSma.toFixed(4)}) is currently floating above 50 EMA (${latestEma.toFixed(4)}), indicating upside acceleration.`);
+      breakdown.push({ name: 'Trend Bias (SMA/EMA)', status: 'bullish', detail: `SMA ${latestSma.toFixed(4)} > EMA ${latestEma.toFixed(4)}` });
     } else {
       buyScore -= 12;
       rationale.push(`Bearish alignment: 20 SMA (${latestSma.toFixed(4)}) resides below 50 EMA (${latestEma.toFixed(4)}), denoting overhead resistance.`);
+      breakdown.push({ name: 'Trend Bias (SMA/EMA)', status: 'bearish', detail: `SMA ${latestSma.toFixed(4)} < EMA ${latestEma.toFixed(4)}` });
     }
+  } else {
+    breakdown.push({ name: 'Trend Bias (SMA/EMA)', status: 'neutral', detail: 'Insufficient data' });
   }
 
-  // 2. RSI oversold/overbought check
+  // 2. RSI
   if (latestRsi !== null && latestRsi !== undefined) {
     if (latestRsi < 30) {
-      buyScore += 20; // very bullish turning point
+      buyScore += 20;
       rationale.push(`RSI is deeply oversold at ${latestRsi.toFixed(1)} (under 30 threshold). Sellers are overextended, presenting high potential for a bullish wedge bounce.`);
+      breakdown.push({ name: 'Momentum Index (RSI)', status: 'bullish', detail: `Oversold ${latestRsi.toFixed(1)}` });
     } else if (latestRsi > 70) {
-      buyScore -= 20; // very bearish
+      buyScore -= 20;
       rationale.push(`RSI is heavily overbought at ${latestRsi.toFixed(1)} (above 70 limit). Buying steam looks exhausted, raising probabilities of a steep price correction.`);
+      breakdown.push({ name: 'Momentum Index (RSI)', status: 'bearish', detail: `Overbought ${latestRsi.toFixed(1)}` });
     } else if (latestRsi > 50) {
       buyScore += 5;
       rationale.push(`RSI sits in constructive territory at ${latestRsi.toFixed(1)}, supporting ongoing momentum.`);
+      breakdown.push({ name: 'Momentum Index (RSI)', status: 'bullish', detail: `Constructive ${latestRsi.toFixed(1)}` });
     } else {
       buyScore -= 5;
       rationale.push(`RSI indicates light distribution at ${latestRsi.toFixed(1)}, pointing to soft buyer presence.`);
+      breakdown.push({ name: 'Momentum Index (RSI)', status: 'bearish', detail: `Distribution ${latestRsi.toFixed(1)}` });
     }
   } else {
     rationale.push('RSI data is not yet available for this timeframe (insufficient candles).');
+    breakdown.push({ name: 'Momentum Index (RSI)', status: 'neutral', detail: 'Insufficient candles' });
   }
 
-  // 3. Bollinger Bands channel position
-  if (latestMacdBbUpper && latestMacdBbLower) {
-    const channelSize = latestMacdBbUpper - latestMacdBbLower;
-    const positionPct = (currentPrice - latestMacdBbLower) / (channelSize || 1);
-    
+  // 3. Bollinger
+  if (latestBbUpper && latestBbLower) {
+    const channelSize = latestBbUpper - latestBbLower;
+    const positionPct = (currentPrice - latestBbLower) / (channelSize || 1);
     if (positionPct < 0.1) {
       buyScore += 15;
-      rationale.push(`Price is pressing against the Lower Bollinger Band context (${latestMacdBbLower.toFixed(4)}). Historically a high-probability zone for immediate buyback reactions.`);
+      rationale.push(`Price is pressing against the Lower Bollinger Band context (${latestBbLower.toFixed(4)}). Historically a high-probability zone for immediate buyback reactions.`);
+      breakdown.push({ name: 'Volatility Channels (Bollinger)', status: 'bullish', detail: `Near lower band ${latestBbLower.toFixed(4)}` });
     } else if (positionPct > 0.9) {
       buyScore -= 15;
-      rationale.push(`Price has broken outside the Upper Bollinger Band (${latestMacdBbUpper.toFixed(4)}). Strong rejection risks are elevated; shorting candidates have increased.`);
+      rationale.push(`Price has broken outside the Upper Bollinger Band (${latestBbUpper.toFixed(4)}). Strong rejection risks are elevated; shorting candidates have increased.`);
+      breakdown.push({ name: 'Volatility Channels (Bollinger)', status: 'bearish', detail: `Above upper band ${latestBbUpper.toFixed(4)}` });
+    } else {
+      breakdown.push({ name: 'Volatility Channels (Bollinger)', status: 'neutral', detail: `Inside bands` });
     }
+  } else {
+    breakdown.push({ name: 'Volatility Channels (Bollinger)', status: 'neutral', detail: 'No BB data' });
   }
 
-  // 4. MACD trend crossovers
+  // 4. MACD
   if (latestMacdHist !== null && latestMacdHist !== undefined && latestMacdLine !== null && latestMacdLine !== undefined) {
     if (latestMacdHist > 0) {
       buyScore += 8;
       if (latestMacdLine > 0) {
         rationale.push(`MACD signal line histogram is positive and climbing, reflecting consistent accumulation trends.`);
+        breakdown.push({ name: 'MACD Trend Divergence', status: 'bullish', detail: `Hist positive ${latestMacdHist.toFixed(4)}, above zero` });
       } else {
         rationale.push(`MACD histogram shifted positive while below zero, indicating an emerging trend change.`);
+        breakdown.push({ name: 'MACD Trend Divergence', status: 'bullish', detail: `Hist positive ${latestMacdHist.toFixed(4)}, emerging` });
       }
     } else {
       buyScore -= 8;
       rationale.push(`MACD histogram is negative, implying that downside pressure remains the dominant path.`);
+      breakdown.push({ name: 'MACD Trend Divergence', status: 'bearish', detail: `Hist negative ${latestMacdHist.toFixed(4)}` });
     }
+  } else {
+    breakdown.push({ name: 'MACD Trend Divergence', status: 'neutral', detail: 'No MACD data' });
   }
 
   // 5. Candlestick Patterns in last 3 periods
-  const recentPatterns = patterns.filter(p => data.length - p.candlestickIndex <= 3);
-  recentPatterns.forEach(pat => {
-    if (pat.type === 'bullish') {
-      buyScore += 15;
-      rationale.push(`Spotted a bullish **${pat.name}** pattern recently. This gives a reliable technical anchor to enter long positions.`);
-    } else if (pat.type === 'bearish') {
-      buyScore -= 15;
-      rationale.push(`Spotted a bearish **${pat.name}** pattern recently. Warns of active distribution and recommends moving stops upwards.`);
-    } else {
-      rationale.push(`Found a neutral **${pat.name}** candlestick formation. Indicates minor consolidating behavior.`);
-    }
-  });
+  const recentPatterns = patterns.filter((p) => data.length - p.candlestickIndex <= 3);
+  if (recentPatterns.length === 0) {
+    breakdown.push({ name: 'Candlestick Formations', status: 'neutral', detail: 'No recent patterns' });
+  } else {
+    recentPatterns.forEach((pat) => {
+      if (pat.type === 'bullish') {
+        buyScore += 15;
+        rationale.push(`Spotted a bullish **${pat.name}** pattern recently. This gives a reliable technical anchor to enter long positions.`);
+        breakdown.push({ name: `Pattern: ${pat.name}`, status: 'bullish', detail: `Win rate est. ${pat.winRate || 60}%` });
+      } else if (pat.type === 'bearish') {
+        buyScore -= 15;
+        rationale.push(`Spotted a bearish **${pat.name}** pattern recently. Warns of active distribution and recommends moving stops upwards.`);
+        breakdown.push({ name: `Pattern: ${pat.name}`, status: 'bearish', detail: `Win rate est. ${pat.winRate || 60}%` });
+      } else {
+        rationale.push(`Found a neutral **${pat.name}** candlestick formation. Indicates minor consolidating behavior.`);
+        breakdown.push({ name: `Pattern: ${pat.name}`, status: 'neutral', detail: `Neutral formation` });
+      }
+    });
+  }
 
-  // Clamp buyScore to range [0, 100]
   const finalScore = Math.max(0, Math.min(100, buyScore));
-
   let type: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
   let confidence = 50;
 
@@ -702,20 +729,14 @@ export function generateSignal(
     confidence = Math.floor(45 + Math.abs(finalScore - 50) * 2);
   }
 
-  // Setup sensible dynamic SL / TP based on instrument pip steps
   const isJPY = symbol.includes('JPY');
-  let atrEquivalent = 0.0025; // simplified ATR
+  let atrEquivalent = 0.0025;
+  if (symbol === 'XAUUSD') atrEquivalent = 8.5;
+  else if (symbol === 'XAGUSD') atrEquivalent = 0.25;
+  else if (isJPY) atrEquivalent = 0.35;
 
-  if (symbol === 'XAUUSD') {
-    atrEquivalent = 8.50;
-  } else if (symbol === 'XAGUSD') {
-    atrEquivalent = 0.25;
-  } else if (isJPY) {
-    atrEquivalent = 0.35;
-  }
   let tp = currentPrice;
   let sl = currentPrice;
-
   if (type === 'BUY') {
     tp = currentPrice + atrEquivalent * 1.5;
     sl = currentPrice - atrEquivalent * 1.0;
@@ -733,7 +754,9 @@ export function generateSignal(
     sl: parseFloat(sl.toFixed(config.pipDecimal + 1)),
     confidence,
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    rationale: rationale.length > 0 ? rationale : ['Market is moving sideways near global anchors. No extreme indicator divergence is seen. Wait for breakout.']
+    rationale: rationale.length > 0 ? rationale : ['Market is moving sideways near global anchors. No extreme indicator divergence is seen. Wait for breakout.'],
+    breakdown,
+    disclaimer: 'Experimental heuristic — not financial advice. Pattern win rates are estimates, not backtested guarantees.',
   };
 }
 

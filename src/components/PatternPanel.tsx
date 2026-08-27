@@ -228,9 +228,14 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
       </div>
 
       {/* Quick educational guide */}
-      <div className="p-3 bg-zinc-900/45 border-t border-zinc-800 text-[10px] text-zinc-500 font-mono flex items-center justify-between">
-        <span>Confluence Scan: active</span>
-        <span>Min threshold: 50% WR</span>
+      <div className="p-3 bg-zinc-900/45 border-t border-zinc-800 text-[10px] text-zinc-500 font-mono space-y-1">
+        <div className="flex items-center justify-between">
+          <span>Confluence Scan: active</span>
+          <span>Min threshold: 50% WR (est.)</span>
+        </div>
+        <div className="text-[9px] leading-snug text-zinc-500/80">
+          ⚠️ Win rates & profit factors are heuristic estimates, not backtested guarantees — not financial advice.
+        </div>
       </div>
     </div>
   );

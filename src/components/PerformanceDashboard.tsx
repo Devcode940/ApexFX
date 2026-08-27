@@ -321,11 +321,13 @@ export const PerformanceDashboard: React.FC = () => {
     };
   }, [filteredClosedTrades, filteredPositions, tradeScope]);
 
-  // Cumulative Equity Chart Data points
+  // Cumulative Equity Chart Data points — fallback for legacy localStorage without closedAt
   const equityCurveData = useMemo(() => {
-    const list = [...filteredClosedTrades].sort(
-      (a, b) => (a.closedAt || 0) - (b.closedAt || 0)
-    );
+    const list = [...filteredClosedTrades].sort((a, b) => {
+      const aTime = a.closedAt ?? a.openedAt ?? 0;
+      const bTime = b.closedAt ?? b.openedAt ?? 0;
+      return aTime - bTime;
+    });
 
     let cumulative = 0;
     const initialPoint = { index: 0, label: 'Start', pnl: 0, cumulative: 0, trade: 'Initial' };

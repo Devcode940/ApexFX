@@ -7,296 +7,121 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import crypto from 'crypto';
 
+// Modular imports
+import { log, warn, error as logError } from './server/lib/logger.js';
+import { fetchWithTimeout } from './server/lib/fetch.js';
+import { isRateLimited, isRateLimitedSync, isChatRateLimited } from './server/lib/rateLimit.js';
+import { securityHeadersMiddleware, getAllowedOrigins, validateSymbolFormat, sanitizeClientIp } from './server/lib/security.js';
+import { historyCache, priceCache } from './server/lib/cache.js';
+import {
+  PAIRS_CONFIG_WS,
+  TD_SYMBOLS,
+  serverWatchlist,
+  fetchTwelveDataQuotes,
+  fetchYahooPricesFor,
+  fetchRealLatestPrices,
+  getQuoteSyncMs,
+  getPollMs,
+  isTdRestCoolingDown,
+} from './server/services/market.js';
+import { fetchMarketHistory } from './server/services/yahoo.js';
+
 dotenv.config();
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-
-// Security: Production mode flag for logging control
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-
-// Safe logging utility - suppresses verbose logs in production
-const log = IS_PRODUCTION 
-  ? (msg: string, ...args: any[]) => { /* Silent in production */ }
-  : console.log;
-
-const warn = (msg: string, ...args: any[]) => {
-  if (!IS_PRODUCTION || process.env.SHOW_WARNINGS === 'true') {
-    console.warn(msg, ...args);
-  }
-};
-
-const error = (msg: string, ...args: any[]) => {
-  // Always log errors, but sanitize sensitive data
-  const sanitizedMsg = msg
-    .replace(/Bearer\s+[a-zA-Z0-9_-]+/g, 'Bearer [REDACTED]')
-    .replace(/token=[a-zA-Z0-9_-]+/g, 'token=[REDACTED]')
-    .replace(/api[_-]?key[=:]\s*[a-zA-Z0-9_-]+/gi, 'api_key=[REDACTED]');
-  console.error(sanitizedMsg, ...args);
-};
+const PORT = (() => {
+  const raw = process.env.PORT;
+  const parsed = raw ? parseInt(raw, 10) : 3000;
+  if (isNaN(parsed) || parsed <= 0 || parsed > 65535) return 3000;
+  return parsed;
+})();
 
 const server = createServer(app);
 
-// Security: Configure allowed origins for WebSocket and CORS
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',') 
-  : ['http://localhost:5173', 'http://localhost:3000'];
+// --- Security: WebSocket server with origin check ---
+const ALLOWED_ORIGINS = getAllowedOrigins();
 
-const wss = new WebSocketServer({ 
+const wss = new WebSocketServer({
   server,
   verifyClient: (info, callback) => {
     const origin = info.origin || info.req.headers.origin;
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
-      callback(true);
+    // In production, require origin to be in allowlist
+    if (process.env.NODE_ENV === 'production') {
+      if (!origin) {
+        // Allow non-browser clients only if they present a valid token via query? 
+        // For verifyClient we can't check token yet, so we allow but connection handler will validate token.
+        callback(true);
+        return;
+      }
+      if (ALLOWED_ORIGINS.includes(origin)) {
+        callback(true);
+      } else {
+        callback(false, 403, 'Unauthorized origin');
+      }
     } else {
-      callback(false, 403, 'Unauthorized origin');
+      // Dev: allow all but log
+      if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+        warn(`[WS] Allowing origin in dev: ${origin}`);
+      }
+      callback(true);
+    }
+  },
+});
+
+// --- Security middleware (helmet-like) ---
+app.use(securityHeadersMiddleware);
+
+// --- WebSocket auth tokens with hardening ---
+const wsAuthTokens = new Map<string, { createdAt: number; ip: string }>();
+const WS_TOKEN_EXPIRY_MS = 5 * 60 * 1000; // 5 min
+const WS_TOKEN_RATE_LIMIT_MAX = 10;
+const WS_TOKEN_RATE_LIMIT_WINDOW = 60_000;
+
+// Cleanup expired WS tokens every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, data] of wsAuthTokens) {
+    if (now - data.createdAt > WS_TOKEN_EXPIRY_MS) {
+      wsAuthTokens.delete(token);
     }
   }
-});
+}, 60_000).unref?.();
 
-// Security: CORS middleware for production environments
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  } else if (process.env.NODE_ENV !== 'production') {
-    // Allow all origins in development
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-  next();
-});
-
-// WebSocket authentication tokens (simple in-memory store for demo purposes)
-const wsAuthTokens = new Map<string, { createdAt: number }>();
-const WS_TOKEN_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
-
-// Rate limiting for API endpoints (in-memory sliding window)
-const rateLimitBuckets = new Map<string, number[]>();
-const RATE_LIMIT_MAX_REQUESTS = 30;
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-
-/** Check if a client is rate-limited. Returns true if rate-limited. */
-function isRateLimited(key: string): boolean {
-  const now = Date.now();
-  const cutoff = now - RATE_LIMIT_WINDOW_MS;
-  const hits = (rateLimitBuckets.get(key) || []).filter((t) => t > cutoff);
-  if (hits.length >= RATE_LIMIT_MAX_REQUESTS) {
-    rateLimitBuckets.set(key, hits);
-    return true;
-  }
-  hits.push(now);
-  rateLimitBuckets.set(key, hits);
-  return false;
-}
-
-/** Rate-limiting middleware for API routes */
-function rateLimitMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const clientKey =
-    (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-    req.socket.remoteAddress ||
-    'unknown';
-  
-  if (isRateLimited(clientKey)) {
+// --- Rate limiting middleware (async, supports Upstash) ---
+async function rateLimitMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const clientKey = sanitizeClientIp(req);
+  const limited = await isRateLimited(clientKey);
+  if (limited) {
     return res.status(429).json({ error: 'Too many requests. Please wait a moment and try again.' });
   }
   next();
 }
 
-// --- Live Server Watchlist and WebSocket Streaming ---
-const PAIRS_CONFIG_WS: Record<string, { name: string; pipDecimal: number }> = {
-  'EURUSD': { name: 'EUR / USD', pipDecimal: 4 },
-  'GBPUSD': { name: 'GBP / USD', pipDecimal: 4 },
-  'USDJPY': { name: 'USD / JPY', pipDecimal: 2 },
-  'AUDUSD': { name: 'AUD / USD', pipDecimal: 4 },
-  'USDCAD': { name: 'USD / CAD', pipDecimal: 4 },
-  'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2 },
-  'XAUUSD': { name: 'Gold / USD', pipDecimal: 2 },
-  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4 },
-};
-
-// Watchlist starts empty (no placeholder/fake prices); real quotes are filled
-// in by fetchRealLatestPrices() immediately on server start.
-const serverWatchlist = Object.keys(PAIRS_CONFIG_WS).map(symbol => {
-  const config = PAIRS_CONFIG_WS[symbol];
-  return {
-    symbol,
-    name: config.name,
-    price: 0,
-    change: 0,
-    high: 0,
-    low: 0,
-  };
-});
-
-// --- Twelve Data integration (primary market source when TWELVEDATA_API_KEY is set) ---
-const TD_SYMBOLS: Record<string, string> = {
-  'EURUSD': 'EUR/USD',
-  'GBPUSD': 'GBP/USD',
-  'USDJPY': 'USD/JPY',
-  'AUDUSD': 'AUD/USD',
-  'USDCAD': 'USD/CAD',
-  'GBPJPY': 'GBP/JPY',
-  'XAUUSD': 'XAU/USD',
-  'XAGUSD': 'XAG/USD',
-};
-const tdApiKey = process.env.TWELVEDATA_API_KEY;
-// When Twelve Data returns 429 (per-minute credit limit reached), REST work
-// pauses until the next minute; the WebSocket stream keeps delivering ticks
-// at no API credit cost.
-let tdRESTCooldownUntil = 0;
-// REST quote costs 1 API credit per symbol (8 for the full watchlist). Free tier
-// allows 8 credits/minute and 800/day. Default the OHLC/change sync to 15 min
-// (8 credits per call = ~96/day, well under the 800/day cap); the WebSocket
-// stream covers tick-level updates at no API credit cost. Paid plans can lower
-// this via TWELVEDATA_QUOTE_SYNC_MS.
-const TD_QUOTE_SYNC_MS = Number(process.env.TWELVEDATA_QUOTE_SYNC_MS) || 900_000;
-// REST polling interval used when the WebSocket stream is not delivering ticks.
-const TD_POLL_MS = Number(process.env.TWELVEDATA_POLL_MS) || 15_000;
-
-/** Refresh the watchlist from the Twelve Data REST quote endpoint (all 8 symbols in one request). */
-async function fetchTwelveDataQuotes(): Promise<Set<string>> {
-  const applied = new Set<string>();
-  if (!tdApiKey) return applied;
-  try {
-    const symbols = Object.values(TD_SYMBOLS).join(',');
-    const res = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols)}`, {
-      headers: {
-        'Authorization': `Bearer ${tdApiKey}`,
-        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
-      }
-    });
-    const raw = await res.json();
-    if (raw?.code) {
-      error('[TwelveData] quote error:', raw?.message || `code ${raw?.code}`);
-      if (raw.code === 429) tdRESTCooldownUntil = Date.now() + 60_000;
-      return applied;
-    }
-    // Response shapes: a single-symbol response carries a `symbol` key with the
-    // quote fields at the top level; a multi-symbol response uses the symbols
-    // themselves as top-level keys (no `data` wrapper, no `status` field).
-    const data: Record<string, any> = {};
-    if (raw?.symbol && typeof raw.close !== 'undefined') {
-      data[raw.symbol] = raw;
-    } else {
-      for (const s of Object.values(TD_SYMBOLS)) {
-        if (raw?.[s] && typeof raw[s] === 'object' && typeof raw[s].close !== 'undefined') data[s] = raw[s];
-      }
-    }
-    if (Object.keys(data).length === 0) return applied;
-
-    for (const item of serverWatchlist) {
-      const tdSymbol = TD_SYMBOLS[item.symbol];
-      const q = tdSymbol ? data[tdSymbol] : null;
-      if (!q) continue;
-      const close = parseFloat(q.close);
-      if (!isFinite(close) || close <= 0) continue;
-      const high = parseFloat(q.high);
-      const low = parseFloat(q.low);
-      const pct = parseFloat(q.percent_change);
-      const config = PAIRS_CONFIG_WS[item.symbol];
-      item.price = parseFloat(close.toFixed(config.pipDecimal + 1));
-      if (isFinite(high) && high > 0) item.high = parseFloat(high.toFixed(config.pipDecimal + 1));
-      else item.high = Math.max(item.high, item.price);
-      if (isFinite(low) && low > 0) item.low = parseFloat(low.toFixed(config.pipDecimal + 1));
-      else item.low = item.low > 0 ? Math.min(item.low, item.price) : item.price;
-      if (isFinite(pct)) item.change = parseFloat(pct.toFixed(2));
-      applied.add(item.symbol);
-    }
-  } catch (e) {
-    error('[TwelveData] quote fetch failed:', (e as Error).message);
-  }
-  return applied;
-}
-
-/** Yahoo Finance fallback for a subset of the watchlist (used when Twelve Data is unavailable). */
-async function fetchYahooPricesFor(items: typeof serverWatchlist) {
-  const symbolsMap: Record<string, string> = {
-    'EURUSD': 'EURUSD=X',
-    'GBPUSD': 'GBPUSD=X',
-    'USDJPY': 'USDJPY=X',
-    'AUDUSD': 'AUDUSD=X',
-    'USDCAD': 'USDCAD=X',
-    'GBPJPY': 'GBPJPY=X',
-    'XAUUSD': 'XAUUSD=X',
-    // Twelve Data free plans don't include XAG/USD and Yahoo has no XAGUSD=X
-    // spot feed — COMEX silver futures (SI=F) is the real-data fallback.
-    'XAGUSD': 'SI=F',
-  };
-
-  // Fetch in parallel so a serverless cold start doesn't serialize 8 upstream calls.
-  await Promise.all(items.map(async (item) => {
-    try {
-      const ticker = symbolsMap[item.symbol] || `${item.symbol}=X`;
-      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`, {
-        headers: {
-          'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
-        }
-      });
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        const result = data?.chart?.result?.[0];
-        const meta = result?.meta;
-        const currentPrice = meta?.regularMarketPrice || result?.indicators?.quote?.[0]?.close?.filter((c: any) => c !== null).pop();
-        if (currentPrice) {
-          const config = PAIRS_CONFIG_WS[item.symbol];
-          item.price = parseFloat(currentPrice.toFixed(config.pipDecimal + 1));
-          item.high = parseFloat((meta?.high || Math.max(item.high, currentPrice)).toFixed(config.pipDecimal + 1));
-          // First real quote: seed the low with the current price instead of 0
-          item.low = parseFloat((meta?.low || (item.low > 0 ? Math.min(item.low, currentPrice) : currentPrice)).toFixed(config.pipDecimal + 1));
-          const prevClose = meta?.chartPreviousClose || currentPrice;
-          item.change = parseFloat((((currentPrice - prevClose) / prevClose) * 100).toFixed(2));
-        }
-      }
-    } catch (e) {
-      error(`Failed to fetch real price for ${item.symbol}:`, e);
-    }
-  }));
-}
-
-/** Live source dispatcher: Twelve Data first, Yahoo as a per-symbol fallback. */
-async function fetchRealLatestPrices() {
-  if (tdApiKey) {
-    const applied = await fetchTwelveDataQuotes();
-    // Any instrument Twelve Data didn't cover (invalid key, rate limit, or a
-    // plan without metals) is fetched from Yahoo so the feed never goes stale.
-    const remaining = serverWatchlist.filter((i) => !applied.has(i.symbol));
-    if (remaining.length > 0) {
-      await fetchYahooPricesFor(remaining);
-    }
-    return;
-  }
-  await fetchYahooPricesFor(serverWatchlist);
-}
-
-/** Twelve Data WebSocket stream: low-latency ticks (WS credits, not API credits). */
+// --- Twelve Data WS streaming ---
 let tdWs: WebSocket | null = null;
 let tdWsReconnectTimer: NodeJS.Timeout | null = null;
 let tdWsHeartbeatTimer: NodeJS.Timeout | null = null;
 let tdWsLastPriceAt = 0;
 
 function startTwelveDataStream() {
+  const tdApiKey = process.env.TWELVEDATA_API_KEY;
   if (!tdApiKey || tdWs || process.env.VERCEL) return;
   try {
     tdWs = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price`, {
       headers: {
-        'Authorization': `Bearer ${tdApiKey}`,
-        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
-      }
-    });
+        Authorization: `Bearer ${tdApiKey}`,
+        'User-Agent': 'ApexFX-Terminal/1.0 (Production)',
+      },
+    } as any);
     tdWs.on('open', () => {
       log('[TwelveData] WebSocket stream connected.');
       tdWs?.send(JSON.stringify({ action: 'subscribe', params: { symbols: Object.values(TD_SYMBOLS).join(',') } }));
       tdWsHeartbeatTimer = setInterval(() => {
-        try { tdWs?.send(JSON.stringify({ action: 'heartbeat' })); } catch { /* ignore */ }
+        try {
+          tdWs?.send(JSON.stringify({ action: 'heartbeat' }));
+        } catch {
+          /* ignore */
+        }
       }, 10_000);
     });
     tdWs.on('message', (data) => {
@@ -317,15 +142,19 @@ function startTwelveDataStream() {
             }
           }
         }
-        // `subscribe-status` events are informational; ignore them.
-      } catch { /* ignore malformed frames */ }
+      } catch {
+        /* ignore malformed frames */
+      }
     });
     tdWs.on('error', (err) => {
       warn('[TwelveData] WebSocket error:', (err as Error).message || 'connection failed');
     });
     tdWs.on('close', () => {
       warn('[TwelveData] WebSocket closed — REST polling fallback is active.');
-      if (tdWsHeartbeatTimer) { clearInterval(tdWsHeartbeatTimer); tdWsHeartbeatTimer = null; }
+      if (tdWsHeartbeatTimer) {
+        clearInterval(tdWsHeartbeatTimer);
+        tdWsHeartbeatTimer = null;
+      }
       tdWs = null;
       scheduleTdWsReconnect();
     });
@@ -344,11 +173,10 @@ function scheduleTdWsReconnect() {
   }, 10_000);
 }
 
-/** One full Twelve Data sync cycle (REST quote + per-symbol Yahoo fallback + broadcast). */
 let tdSyncInFlight = false;
 async function tdSyncOnce() {
   if (tdSyncInFlight) return;
-  if (Date.now() < tdRESTCooldownUntil) return; // credits resetting — WebSocket still streams ticks
+  if (isTdRestCoolingDown()) return;
   tdSyncInFlight = true;
   try {
     const applied = await fetchTwelveDataQuotes();
@@ -359,55 +187,6 @@ async function tdSyncOnce() {
     tdSyncInFlight = false;
   }
 }
-
-/** Twelve Data historical candles for a symbol/timeframe, or null to fall back to Yahoo. */
-const TD_INTERVALS: Record<string, string> = {
-  '1m': '1min', '5m': '5min', '15m': '15min', '1H': '1h', '4H': '4h', 'D': '1day',
-};
-async function fetchTwelveDataHistory(symbol: string, timeframe: string) {
-  if (!tdApiKey) return null;
-  const tdInterval = TD_INTERVALS[timeframe];
-  const tdSymbol = TD_SYMBOLS[symbol];
-  if (!tdInterval || !tdSymbol) return null;
-  try {
-    const res = await fetch(
-      `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&outputsize=800&timezone=UTC&order=asc`,
-      {
-        headers: {
-          'Authorization': `Bearer ${tdApiKey}`,
-          'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
-        }
-      }
-    );
-    const raw = await res.json();
-    if (raw?.status === 'error' || raw?.code || !Array.isArray(raw.values)) {
-      warn('[TwelveData] time_series error:', raw?.message || raw?.code || 'no values');
-      if (raw?.code === 429) tdRESTCooldownUntil = Date.now() + 60_000;
-      return null;
-    }
-    const candles = raw.values
-      .map((v: any) => {
-        const time = Date.parse(`${String(v.datetime).replace(' ', 'T')}Z`) / 1000;
-        const open = parseFloat(v.open);
-        const high = parseFloat(v.high);
-        const low = parseFloat(v.low);
-        const close = parseFloat(v.close);
-        if (!isFinite(time) || !isFinite(open) || !isFinite(high) || !isFinite(low) || !isFinite(close) || open <= 0) return null;
-        return { time, open, high, low, close, volume: Math.floor(parseFloat(v.volume) || 0) };
-      })
-      .filter((c: any) => c !== null);
-    if (candles.length === 0) {
-      warn('[TwelveData] time_series returned no valid candles');
-      return null;
-    }
-    return { success: true, symbol, timeframe, data: candles };
-  } catch (e) {
-    warn('[TwelveData] time_series fetch failed:', (e as Error).message);
-    return null;
-  }
-}
-
-
 
 function broadcastPrices() {
   const payload = JSON.stringify({
@@ -421,38 +200,32 @@ function broadcastPrices() {
       };
       return acc;
     }, {} as Record<string, any>),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
-  
-  wss.clients.forEach(client => {
+
+  wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(payload);
     }
   });
 }
 
-// Only run the persistent streaming loop on Node hosts. On Vercel (serverless),
-// these module-level timers would spin up on every cold import — the stateless
-// HTTP endpoints remain available and the client falls back to polling.
+// Only run persistent streaming on Node hosts (not Vercel)
 if (!process.env.VERCEL) {
-  // Initial sync on server start
   fetchRealLatestPrices().then(() => {
     log('[Server] Successfully synchronized initial real Forex and Commodity quotes.');
     broadcastPrices();
   });
 
+  const tdApiKey = process.env.TWELVEDATA_API_KEY;
   if (tdApiKey) {
-    // Primary low-latency feed: Twelve Data WebSocket ticks.
     startTwelveDataStream();
-    // Slow REST refresh for OHLC/change (8 API credits per full watchlist sync).
-    setInterval(tdSyncOnce, TD_QUOTE_SYNC_MS);
-    // REST polling fallback whenever the WebSocket is not delivering ticks.
+    setInterval(tdSyncOnce, getQuoteSyncMs());
     setInterval(() => {
       const stale = Date.now() - tdWsLastPriceAt > 30_000;
       if (stale || !tdWs) tdSyncOnce();
-    }, TD_POLL_MS);
+    }, getPollMs());
   } else {
-    // No Twelve Data key: Yahoo Finance is the single live source, polled every 5s.
     setInterval(() => {
       fetchRealLatestPrices().then(() => {
         broadcastPrices();
@@ -461,29 +234,58 @@ if (!process.env.VERCEL) {
   }
 }
 
-// Endpoint to generate WebSocket auth token (requires simple shared secret in production)
-app.get('/api/ws/token', (req, res) => {
-  // In production, verify user authentication here before issuing a token
+// --- Health check ---
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    watchlist: serverWatchlist.length,
+    wsClients: wss.clients.size,
+    env: process.env.NODE_ENV || 'development',
+  });
+});
+
+// --- Secured WS token endpoint ---
+app.get('/api/ws/token', async (req, res) => {
+  const clientIp = sanitizeClientIp(req);
+
+  // Rate limit token issuance
+  if (isRateLimitedSync(`ws_token:${clientIp}`, WS_TOKEN_RATE_LIMIT_MAX, WS_TOKEN_RATE_LIMIT_WINDOW)) {
+    return res.status(429).json({ error: 'Too many token requests. Please wait.' });
+  }
+
+  // If WS_SHARED_SECRET is set, require it
+  const requiredSecret = process.env.WS_SHARED_SECRET;
+  if (requiredSecret) {
+    const provided = (req.headers['x-ws-secret'] as string) || (req.query.secret as string);
+    if (!provided || provided !== requiredSecret) {
+      return res.status(403).json({ error: 'Invalid or missing WS secret' });
+    }
+  } else if (process.env.NODE_ENV === 'production') {
+    // In prod without shared secret, require origin to be allowed
+    const origin = req.headers.origin;
+    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+      return res.status(403).json({ error: 'Origin not allowed' });
+    }
+  }
+
   const token = crypto.randomBytes(32).toString('hex');
-  wsAuthTokens.set(token, { createdAt: Date.now() });
-  // Clean up old tokens periodically
-  setTimeout(() => wsAuthTokens.delete(token), WS_TOKEN_EXPIRY_MS);
+  wsAuthTokens.set(token, { createdAt: Date.now(), ip: clientIp });
+  setTimeout(() => wsAuthTokens.delete(token), WS_TOKEN_EXPIRY_MS).unref?.();
   res.json({ token, expiresIn: WS_TOKEN_EXPIRY_MS / 1000 });
 });
 
 wss.on('connection', (ws, req) => {
-  // Extract token from URL query params for authentication
   const url = new URL(req.url || '', `http://localhost:${PORT}`);
   const token = url.searchParams.get('token');
-  
-  // Validate token
+
   if (!token || !wsAuthTokens.has(token)) {
     ws.send(JSON.stringify({ type: 'ERROR', message: 'Authentication failed' }));
     ws.close(4001, 'Unauthorized');
     return;
   }
-  
-  // Verify token hasn't expired
+
   const tokenData = wsAuthTokens.get(token);
   if (tokenData && Date.now() - tokenData.createdAt > WS_TOKEN_EXPIRY_MS) {
     wsAuthTokens.delete(token);
@@ -491,10 +293,9 @@ wss.on('connection', (ws, req) => {
     ws.close(4002, 'Token Expired');
     return;
   }
-  
-  // Token is valid - remove it (single-use) and proceed
+
   wsAuthTokens.delete(token);
-  
+
   const initialPayload = JSON.stringify({
     type: 'INITIAL_RATES',
     rates: serverWatchlist.reduce((acc, item) => {
@@ -506,15 +307,17 @@ wss.on('connection', (ws, req) => {
       };
       return acc;
     }, {} as Record<string, any>),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
   ws.send(initialPayload);
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// Apply rate limiting to ALL /api/* routes (no exceptions)
-app.use('/api', rateLimitMiddleware);
+// Apply rate limiting to ALL /api/* routes (no exceptions) - async version
+app.use('/api', (req, res, next) => {
+  rateLimitMiddleware(req, res, next).catch(next);
+});
 
 // Initialize Gemini API client
 const apiKey = process.env.GEMINI_API_KEY;
@@ -531,16 +334,10 @@ if (apiKey) {
   });
 }
 
-// OpenRouter: alternative AI provider (OpenAI-compatible). When OPENROUTER_API_KEY
-// is set, /api/chat routes through OpenRouter instead of Gemini.
 const OPENROUTER_KEY_CANDIDATE = process.env.OPENROUTER_API_KEY;
-// Only treat OpenRouter as configured when the key looks like a real OpenRouter
-// key (sk-or-v1-...). Placeholders/truncated values are ignored so the app falls
-// back to Gemini instead of failing on a bad key.
 const openRouterApiKey = OPENROUTER_KEY_CANDIDATE?.startsWith('sk-or-') ? OPENROUTER_KEY_CANDIDATE : undefined;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/auto';
 
-/** Convert Gemini-style contents [{role, parts:[{text}|{inlineData}]}] to OpenAI chat messages. */
 function toOpenRouterMessages(contents: any[]) {
   return contents.map((c) => {
     const content: any[] = [];
@@ -557,10 +354,9 @@ function toOpenRouterMessages(contents: any[]) {
   });
 }
 
-/** Generate a chat completion via OpenRouter (OpenAI-compatible chat completions API). */
 async function generateOpenRouter(system: string, contents: any[]) {
   const messages = [{ role: 'system', content: system }, ...toOpenRouterMessages(contents)];
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const res = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${openRouterApiKey}`,
@@ -569,6 +365,7 @@ async function generateOpenRouter(system: string, contents: any[]) {
       'X-Title': 'ApexFX',
     },
     body: JSON.stringify({ model: OPENROUTER_MODEL, messages, max_tokens: 1024 }),
+    timeoutMs: 15000,
   });
   if (!res.ok) {
     throw new Error(`OpenRouter error ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -582,31 +379,27 @@ async function generateOpenRouter(system: string, contents: any[]) {
 // 1. REAL DATA API: Live rates fetched from public Frankfurter API
 app.get('/api/forex', async (req, res) => {
   try {
-    const response = await fetch('https://api.frankfurter.app/latest?from=USD');
+    const cacheKey = 'frankfurter:USD';
+    const cached = priceCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const response = await fetchWithTimeout('https://api.frankfurter.app/latest?from=USD', { timeoutMs: 6000 });
     if (!response.ok) {
       throw new Error(`Frankfurter API returned status ${response.status}`);
     }
     const data = await response.json();
-    
-    // Map rates to standard currency pairs
-    // base: USD, rates: { EUR: 0.9324, JPY: 158.45, GBP: 0.7891, ... }
+
     const r = data.rates || {};
-    
-    // Convert to standard formats:
-    // EURUSD = 1 / EUR
-    // GBPUSD = 1 / GBP
-    // AUDUSD = 1 / AUD
-    // USDJPY = JPY
-    // USDCAD = CAD
-    // USDCHF = CHF
     const eurRates = r.EUR ? parseFloat((1 / r.EUR).toFixed(5)) : null;
     const gbpRates = r.GBP ? parseFloat((1 / r.GBP).toFixed(5)) : null;
     const audRates = r.AUD ? parseFloat((1 / r.AUD).toFixed(5)) : null;
     const jpyRates = r.JPY ? parseFloat(r.JPY.toFixed(3)) : null;
     const cadRates = r.CAD ? parseFloat(r.CAD.toFixed(5)) : null;
-    const gbpjpyRates = (r.GBP && r.JPY) ? parseFloat((r.JPY / r.GBP).toFixed(3)) : null;
+    const gbpjpyRates = r.GBP && r.JPY ? parseFloat((r.JPY / r.GBP).toFixed(3)) : null;
 
-    res.json({
+    const result = {
       success: true,
       source: 'Frankfurter Real-time API',
       timestamp: data.date,
@@ -617,10 +410,13 @@ app.get('/api/forex', async (req, res) => {
         AUDUSD: audRates,
         USDCAD: cadRates,
         GBPJPY: gbpjpyRates,
-      }
-    });
-  } catch (error: any) {
-    error('Frankfurter API error:', error.message);
+      },
+    };
+
+    priceCache.set(cacheKey, result, 30_000);
+    res.json(result);
+  } catch (e: any) {
+    logError('Frankfurter API error:', e.message);
     res.json({
       success: false,
       error: 'Failed to fetch live rates',
@@ -633,14 +429,18 @@ let lastPriceFetchTs = 0;
 const PRICE_FETCH_CACHE_MS = 4000;
 app.get('/api/market/prices', async (req, res) => {
   try {
-    // On serverless (Vercel) the streaming loop doesn't run, so the watchlist is
-    // only filled on demand. Use a short TTL cache and the free Yahoo path (not
-    // Twelve Data) so each client poll request doesn't drain REST credits.
+    const cacheKey = 'watchlist:prices';
+    const cached = priceCache.get(cacheKey);
+    if (cached && Date.now() - lastPriceFetchTs < PRICE_FETCH_CACHE_MS) {
+      return res.json(cached);
+    }
+
     if (process.env.VERCEL && Date.now() - lastPriceFetchTs > PRICE_FETCH_CACHE_MS) {
       await fetchYahooPricesFor(serverWatchlist);
       lastPriceFetchTs = Date.now();
     }
-    res.json({
+
+    const result = {
       success: true,
       rates: serverWatchlist.reduce((acc, item) => {
         acc[item.symbol] = {
@@ -651,158 +451,51 @@ app.get('/api/market/prices', async (req, res) => {
         };
         return acc;
       }, {} as Record<string, any>),
-      timestamp: new Date().toISOString()
-    });
+      timestamp: new Date().toISOString(),
+    };
+
+    priceCache.set(cacheKey, result, PRICE_FETCH_CACHE_MS);
+    res.json(result);
   } catch (e) {
     res.status(502).json({ error: 'Failed to fetch market prices' });
   }
 });
 
-// 4. REAL HISTORICAL CHART DATA API (Yahoo Finance)
+// 4. REAL HISTORICAL CHART DATA API
 app.get('/api/market/history', async (req, res) => {
   try {
     const { symbol, timeframe } = req.query;
     if (!symbol || !timeframe) {
       return res.status(400).json({ error: 'Symbol and timeframe are required' });
     }
-    
-    // Validate symbol format (alphanumeric only)
-    if (!/^[A-Z0-9]+$/.test(symbol as string)) {
+
+    const sym = String(symbol).toUpperCase();
+    const tf = String(timeframe);
+
+    if (!validateSymbolFormat(sym, false)) {
       return res.status(400).json({ error: 'Invalid symbol format' });
     }
-    
-    // Validate timeframe
+
     const validTimeframes = ['1m', '5m', '15m', '1H', '4H', 'D'];
-    if (!validTimeframes.includes(timeframe as string)) {
+    if (!validTimeframes.includes(tf)) {
       return res.status(400).json({ error: 'Invalid timeframe' });
     }
 
-    const symbolsMap: Record<string, string> = {
-      'EURUSD': 'EURUSD=X',
-      'GBPUSD': 'GBPUSD=X',
-      'USDJPY': 'USDJPY=X',
-      'AUDUSD': 'AUDUSD=X',
-      'USDCAD': 'USDCAD=X',
-      'GBPJPY': 'GBPJPY=X',
-      'XAUUSD': 'XAUUSD=X',
-      'XAGUSD': 'XAGUSD=X',
-    };
-
-    const ticker = symbolsMap[symbol as string] || `${symbol}=X`;
-
-    // Twelve Data is the primary history source when an API key is configured;
-    // fall through to Yahoo Finance on any failure.
-    if (tdApiKey) {
-      const tdResult = await fetchTwelveDataHistory(symbol as string, timeframe as string);
-      if (tdResult) return res.json(tdResult);
+    if (sym.length > 10) {
+      return res.status(400).json({ error: 'Symbol too long' });
     }
 
-    // Map timeframe to Yahoo Finance interval and range
-    let interval = '1h';
-    let range = '30d';
-
-    switch (timeframe) {
-      case '1m':
-        interval = '1m';
-        range = '2d'; // 2 days of 1-minute data
-        break;
-      case '5m':
-        interval = '5m';
-        range = '5d';
-        break;
-      case '15m':
-        interval = '15m';
-        range = '10d';
-        break;
-      case '1H':
-        interval = '1h';
-        range = '60d';
-        break;
-      case '4H':
-        // Fetch 1h and aggregate to 4H
-        interval = '1h';
-        range = '120d';
-        break;
-      case 'D':
-        interval = '1d';
-        range = '365d';
-        break;
-      default:
-        interval = '1h';
-        range = '60d';
+    const cacheKey = `history:${sym}:${tf}`;
+    const cached = historyCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
     }
 
-    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${interval}&range=${range}`, {
-      headers: {
-        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
-      }
-    });
-
-    if (!response.ok) {
-      throw new Error(`Yahoo Finance returned status ${response.status}`);
-    }
-
-    const data = await response.json() as any;
-    const result = data?.chart?.result?.[0];
-    if (!result) {
-      throw new Error('Invalid response structure from Yahoo Finance');
-    }
-
-    const timestamps = result.timestamp || [];
-    const quote = result.indicators?.quote?.[0] || {};
-    const opens = quote.open || [];
-    const highs = quote.high || [];
-    const lows = quote.low || [];
-    const closes = quote.close || [];
-    const volumes = quote.volume || [];
-
-    let candlesticks: any[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      const t = timestamps[i];
-      const o = opens[i];
-      const h = highs[i];
-      const l = lows[i];
-      const c = closes[i];
-      const v = volumes[i] || 0;
-
-      if (t !== undefined && o !== null && h !== null && l !== null && c !== null && o !== undefined && h !== undefined && l !== undefined && c !== undefined) {
-        candlesticks.push({
-          time: t,
-          open: parseFloat(o.toFixed(5)),
-          high: parseFloat(h.toFixed(5)),
-          low: parseFloat(l.toFixed(5)),
-          close: parseFloat(c.toFixed(5)),
-          volume: Math.floor(v),
-        });
-      }
-    }
-
-    // If 4H is requested, aggregate hourly data to 4H candles
-    if (timeframe === '4H') {
-      const aggregated: any[] = [];
-      // Group hourly candles in 4-hour chunks (14400 seconds)
-      for (let i = 0; i < candlesticks.length; i += 4) {
-        const chunk = candlesticks.slice(i, i + 4);
-        if (chunk.length === 0) continue;
-        const open = chunk[0].open;
-        const close = chunk[chunk.length - 1].close;
-        const high = Math.max(...chunk.map(c => c.high));
-        const low = Math.min(...chunk.map(c => c.low));
-        const volume = chunk.reduce((sum, c) => sum + (c.volume || 0), 0);
-        const time = chunk[0].time;
-        aggregated.push({ time, open, high, low, close, volume });
-      }
-      candlesticks = aggregated;
-    }
-
-    res.json({
-      success: true,
-      symbol,
-      timeframe,
-      data: candlesticks,
-    });
-  } catch (error: any) {
-    error('Failed to fetch historical data from Yahoo:', error);
+    const result = await fetchMarketHistory(sym, tf);
+    historyCache.set(cacheKey, result, 60_000);
+    res.json(result);
+  } catch (e: any) {
+    logError('Failed to fetch historical data:', e);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch historical data',
@@ -810,32 +503,11 @@ app.get('/api/market/history', async (req, res) => {
   }
 });
 
-// --- /api/chat guardrails: rate limiting + payload caps ---
-const chatRateBuckets = new Map<string, number[]>();
-const CHAT_MAX_PER_WINDOW = 10;
-const CHAT_WINDOW_MS = 60_000;
+// --- /api/chat guardrails ---
 const CHAT_MAX_HISTORY = 30;
 const CHAT_MAX_MESSAGE_LEN = 8000;
 const CHAT_TIMEOUT_MS = 45_000;
 
-function isChatRateLimited(key: string): boolean {
-  const now = Date.now();
-  const cutoff = now - CHAT_WINDOW_MS;
-  const hits = (chatRateBuckets.get(key) || []).filter((t) => t > cutoff);
-  if (hits.length === 0) {
-    chatRateBuckets.delete(key);
-    return false;
-  }
-  if (hits.length >= CHAT_MAX_PER_WINDOW) {
-    chatRateBuckets.set(key, hits);
-    return true;
-  }
-  hits.push(now);
-  chatRateBuckets.set(key, hits);
-  return false;
-}
-
-// 2. REAL AI API: Real Gemini model chat endpoint
 app.post('/api/chat', async (req, res) => {
   try {
     const { messages, selectedSymbol, selectedTimeframe, activeSignal } = req.body;
@@ -850,35 +522,37 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or missing messages array.' });
     }
 
-    // Rate limit by client IP (cheap in-memory sliding window)
-    const clientKey =
-      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      'unknown';
+    const clientKey = sanitizeClientIp(req);
     if (isChatRateLimited(clientKey)) {
       return res.status(429).json({ error: 'Too many requests. Please wait a moment and try again.' });
     }
 
-    // Cap history length and per-message size
     const recent = messages.slice(-CHAT_MAX_HISTORY);
     for (const m of recent) {
       if (typeof m.text !== 'string' || m.text.length > CHAT_MAX_MESSAGE_LEN) {
         return res.status(400).json({ error: `Message too long (maximum ${CHAT_MAX_MESSAGE_LEN} characters).` });
       }
+      // Basic injection guard for symbol/timeframe
+      if (m.text.length > CHAT_MAX_MESSAGE_LEN) {
+        return res.status(400).json({ error: 'Message too long' });
+      }
     }
 
-    // Format prompt context
+    // Sanitize symbol/timeframe for prompt injection
+    const safeSymbol = typeof selectedSymbol === 'string' ? selectedSymbol.replace(/[^A-Z0-9\/]/g, '').slice(0, 20) : 'EURUSD';
+    const safeTimeframe = typeof selectedTimeframe === 'string' && ['1m','5m','15m','1H','4H','D'].includes(selectedTimeframe) ? selectedTimeframe : '1H';
+
     const contextStr = `
 You are the ApexFX AI Analyst (AI Co-Pilot Strategist) in a professional trading platform.
-Current active instrument: ${selectedSymbol}
-Active timeframe: ${selectedTimeframe}
-Latest analytical consensus signal: ${activeSignal ? JSON.stringify(activeSignal) : 'None'}
+Current active instrument: ${safeSymbol}
+Active timeframe: ${safeTimeframe}
+Latest analytical consensus signal: ${activeSignal ? JSON.stringify(activeSignal).slice(0, 2000) : 'None'}
 
 Provide professional, accurate, and insightful trading or analysis answers. Use clean markdown formatting. Keep answers concise, highly specific, and focused on technical/fundamental aspects of forex trading. Use the exact symbol's pip and price characteristics in your explanations.
+
+DISCLAIMER: These are experimental heuristic estimates, not financial advice. Win rates and profit factors shown elsewhere in the platform are heuristic estimates, not backtested results.
 `;
 
-    // Send the full conversation history so the model keeps multi-turn context.
-    // Attach any inline chart snapshot to the user message that carries it.
     const contents = recent
       .map((m: any) => {
         const parts: any[] = [];
@@ -886,6 +560,15 @@ Provide professional, accurate, and insightful trading or analysis answers. Use 
           const imgStr = String(m.image);
           const matches = imgStr.match(/^data:([^;]+);base64,(.+)$/);
           if (matches && matches.length === 3) {
+            // Validate mime type
+            const mime = matches[1];
+            if (!['image/png','image/jpeg','image/webp','image/jpg'].includes(mime)) {
+              return null;
+            }
+            // Validate base64 size < 5MB
+            if (matches[2].length > 7_000_000) {
+              return null;
+            }
             parts.push({
               inlineData: {
                 mimeType: matches[1],
@@ -896,17 +579,16 @@ Provide professional, accurate, and insightful trading or analysis answers. Use 
         }
         const text = typeof m.text === 'string' ? m.text : '';
         if (text.trim()) {
-          parts.push({ text });
+          parts.push({ text: text.slice(0, CHAT_MAX_MESSAGE_LEN) });
         }
         return { role: m.sender === 'user' ? 'user' : 'model', parts };
       })
-      .filter((c: any) => c.parts.length > 0);
+      .filter((c: any) => c && c.parts.length > 0);
 
     if (contents.length === 0) {
       return res.status(400).json({ error: 'No usable message content.' });
     }
 
-    // Gemini requires the first turn to come from the user role
     if (contents[0].role !== 'user') {
       contents[0].role = 'user';
     }
@@ -922,7 +604,7 @@ Provide professional, accurate, and insightful trading or analysis answers. Use 
     } else {
       const result = await Promise.race([
         ai!.models.generateContent({
-          model: 'gemini-3.5-flash',
+          model: 'gemini-2.0-flash',
           contents,
           config: { systemInstruction: contextStr },
         }),
@@ -930,12 +612,12 @@ Provide professional, accurate, and insightful trading or analysis answers. Use 
           setTimeout(() => reject(new Error(`Gemini request timed out after ${CHAT_TIMEOUT_MS / 1000}s.`)), CHAT_TIMEOUT_MS)
         ),
       ]);
-      text = result.text || "I apologize, but I couldn't generate a response. Please try again.";
+      text = (result as any).text || "I apologize, but I couldn't generate a response. Please try again.";
     }
 
     res.json({ text });
-  } catch (error: any) {
-    error('AI error:', error);
+  } catch (e: any) {
+    logError('AI error:', e);
     res.status(500).json({
       error: 'An error occurred while processing your request.',
     });
@@ -952,20 +634,19 @@ app.get('/api/market/news', async (req, res) => {
       return res.status(500).json({ error: 'Service unavailable' });
     }
     const { category = 'forex' } = req.query;
-    // Validate category parameter
-    if (typeof category !== 'string' || !/^[a-z]+$/.test(category)) {
+    if (typeof category !== 'string' || !/^[a-z]{1,20}$/.test(category)) {
       return res.status(400).json({ error: 'Invalid category parameter' });
     }
-    // Use Authorization header instead of query param to prevent key leakage in logs
-    const response = await fetch(`https://finnhub.io/api/v1/news?category=${encodeURIComponent(category)}`, {
+    const response = await fetchWithTimeout(`https://finnhub.io/api/v1/news?category=${encodeURIComponent(category)}`, {
       headers: {
-        'Authorization': `Bearer ${apiKey}`
-      }
+        Authorization: `Bearer ${apiKey}`,
+      },
+      timeoutMs: 6000,
     });
     if (!response.ok) throw new Error('Failed to fetch from Finnhub');
     const data = await response.json();
     res.json(data);
-  } catch (error: any) {
+  } catch (e: any) {
     res.status(500).json({ error: 'Failed to fetch market news' });
   }
 });
@@ -979,20 +660,22 @@ app.get('/api/market/quote', async (req, res) => {
     }
     const { symbol } = req.query;
     if (!symbol) return res.status(400).json({ error: 'Symbol is required' });
-    // Validate symbol format (alphanumeric and / only)
-    if (!/^[A-Z0-9\/]+$/.test(symbol as string)) {
+    if (!validateSymbolFormat(symbol as string, true)) {
       return res.status(400).json({ error: 'Invalid symbol format' });
     }
-    const response = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol as string)}`, {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
+    const response = await fetchWithTimeout(
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol as string)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        timeoutMs: 6000,
       }
-    });
+    );
     if (!response.ok) throw new Error('Failed to fetch from Twelve Data');
     const data = await response.json();
     res.json(data);
-  } catch (error: any) {
+  } catch (e: any) {
     res.status(500).json({ error: 'Failed to fetch market quote' });
   }
 });
@@ -1005,23 +688,22 @@ app.get('/api/market/forexrate', async (req, res) => {
       return res.status(500).json({ error: 'Service unavailable' });
     }
     const { base = 'USD' } = req.query;
-    // Validate base currency format (3 uppercase letters only)
     if (base && !/^[A-Z]{3}$/.test(base as string)) {
       return res.status(400).json({ error: 'Invalid base currency format' });
     }
-    const response = await fetch(`https://api.forexrateapi.com/v1/latest`, {
+    const response = await fetchWithTimeout(`https://api.forexrateapi.com/v1/latest`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'User-Agent': 'ApexFX-Terminal/1.0 (Production)'
       },
-      body: JSON.stringify({ base: base || 'USD' })
+      body: JSON.stringify({ base: base || 'USD' }),
+      timeoutMs: 6000,
     });
     if (!response.ok) throw new Error('Failed to fetch from ForexRate API');
     const data = await response.json();
     res.json(data);
-  } catch (error: any) {
+  } catch (e: any) {
     res.status(500).json({ error: 'Failed to fetch forex rate' });
   }
 });
@@ -1038,12 +720,17 @@ async function startServer() {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
+      // Don't intercept API routes
+      if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   server.listen(PORT, '0.0.0.0', () => {
     log(`[Server] Running full-stack environment on http://localhost:${PORT}`);
+    log(`[Server] Health check at http://localhost:${PORT}/api/health`);
   });
 }
 
@@ -1052,4 +739,3 @@ export default app;
 if (!process.env.VERCEL) {
   startServer();
 }
-

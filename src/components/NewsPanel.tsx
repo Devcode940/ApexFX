@@ -26,11 +26,14 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
   const itemsPerPage = 4;
 
   useEffect(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+
     const fetchNews = async () => {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetch('/api/market/news?category=forex');
+        const response = await fetch('/api/market/news?category=forex', { signal: controller.signal });
         const data = await response.json();
         
         if (!response.ok) {
@@ -38,11 +41,8 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
         }
 
         if (Array.isArray(data) && data.length > 0) {
-          // Map Finnhub news format to our NewsItem type
           const formattedNews: NewsItem[] = data.slice(0, 15).map((item: FinnhubNewsItem) => {
             const date = new Date(item.datetime * 1000);
-            
-            // Generate some plausible affected pairs from text
             const text = `${item.headline} ${item.summary || ''}`.toUpperCase();
             const pairs = [];
             if (text.includes('USD') || text.includes('FED')) pairs.push('USD');
@@ -56,22 +56,32 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
               title: item.headline,
               source: item.source || 'Finnhub',
               time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              impact: 'MEDIUM', // Finnhub free doesn't easily give impact rating
+              impact: 'MEDIUM',
               affectedPairs: pairs,
-              sentiment: 'neutral', // default, could be analyzed with AI if we had time
+              sentiment: 'neutral',
             };
           });
-          setNews(formattedNews);
+          if (!controller.signal.aborted) setNews(formattedNews);
         }
       } catch (err: any) {
-        console.warn("Live news feed unavailable:", err.message);
-        setError(err.message || 'Configure FINNHUB_API_KEY in secrets to see live news.');
+        if (err.name === 'AbortError') {
+          console.warn("News fetch timed out");
+          setError('News feed timed out — retrying...');
+        } else {
+          console.warn("Live news feed unavailable:", err.message);
+          setError(err.message || 'Configure FINNHUB_API_KEY in secrets to see live news.');
+        }
       } finally {
-        setLoading(false);
+        clearTimeout(timeout);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
 
     fetchNews();
+    return () => {
+      controller.abort();
+      clearTimeout(timeout);
+    };
   }, [selectedSymbol]);
 
   // Sort or highlight news that explicitly affects the active selected symbol
