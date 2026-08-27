@@ -140,7 +140,7 @@ All endpoints return JSON and are safe to call from Postman, `curl`, or any HTTP
 │   │   ├── SignalPanel.tsx        # Buy/sell consensus signal
 │   │   ├── PositionsPanel.tsx     # Paper trades + SL/TP execution
 │   │   ├── PatternPanel.tsx       # Price-action pattern recognition
-│   │   ├── AiAssistant.tsx        # Gemini confluence center
+│   │   ├── AiAssistant.tsx        # AI confluence center (Gemini/OpenRouter)
 │   │   ├── PerformanceDashboard.tsx
 │   │   ├── NewsPanel.tsx
 │   │   ├── SupabaseSync.tsx

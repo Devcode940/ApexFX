@@ -223,7 +223,7 @@ export function useChartCore(params: UseChartCoreParams): void {
     });
     resizeObserver.observe(container);
 
-    // Double-click to auto fit chart timescale
+    // Double-click to auto-fit the chart time scale
     const handleDblClick = () => {
       chart.timeScale().fitContent();
     };

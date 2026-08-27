@@ -43,9 +43,6 @@ export const TIME_CONFIG: Record<Timeframe, { label: string; offsetSec: number }
   'D': { label: '1 Day', offsetSec: 86400 },
 };
 
-// Generates starting dataset for pairs
-
-
 // Indicator computations
 export function computeSMA(data: Candlestick[], period = 20): (number | null)[] {
   const sma: (number | null)[] = [];
@@ -84,6 +81,14 @@ export function computeEMA(data: Candlestick[], period = 50): (number | null)[] 
   return ema;
 }
 
+function calculateRsiValue(avgGain: number, avgLoss: number): number {
+  if (avgLoss === 0) return avgGain === 0 ? 50 : 100;
+  if (avgGain === 0) return 0;
+
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
 export function computeRSI(data: Candlestick[], period = 14): (number | null)[] {
   const rsi: (number | null)[] = [];
   if (data.length <= period) {
@@ -93,7 +98,7 @@ export function computeRSI(data: Candlestick[], period = 14): (number | null)[] 
   let avgGain = 0;
   let avgLoss = 0;
 
-  // First RSI value calculations
+  // Calculate the first RSI value from the initial lookback window.
   for (let i = 1; i <= period; i++) {
     const diff = data[i].close - data[i - 1].close;
     if (diff > 0) avgGain += diff;
@@ -107,8 +112,7 @@ export function computeRSI(data: Candlestick[], period = 14): (number | null)[] 
     rsi.push(null);
   }
 
-  const initialRs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-  rsi.push(100 - 100 / (1 + initialRs));
+  rsi.push(calculateRsiValue(avgGain, avgLoss));
 
   for (let i = period + 1; i < data.length; i++) {
     const diff = data[i].close - data[i - 1].close;
@@ -118,8 +122,7 @@ export function computeRSI(data: Candlestick[], period = 14): (number | null)[] 
     avgGain = (avgGain * (period - 1) + gain) / period;
     avgLoss = (avgLoss * (period - 1) + loss) / period;
 
-    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    rsi.push(100 - 100 / (1 + rs));
+    rsi.push(calculateRsiValue(avgGain, avgLoss));
   }
 
   return rsi;
