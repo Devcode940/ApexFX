@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Candlestick } from '../types';
+import { formatPrice, getContractSize, computeSMA, computeRSI, calculateVolatilityDetails, detectPatterns, generateSignal } from './forexData';
 /** Deterministic candles for unit tests only (never used in the app). */
 function makeCandles(count: number, startPrice = 1.08): Candlestick[] {
   const out: Candlestick[] = [];
@@ -15,7 +16,18 @@ function makeCandles(count: number, startPrice = 1.08): Candlestick[] {
   }
   return out;
 }
-import { formatPrice, getContractSize, computeSMA, computeRSI, calculateVolatilityDetails, detectPatterns, generateSignal } from './forexData';
+
+function makeTrendCandles(closes: number[]): Candlestick[] {
+  const base = 1_700_100_000;
+  return closes.map((close, i) => ({
+    time: base + i * 3600,
+    open: i === 0 ? close : closes[i - 1],
+    high: close + 0.0003,
+    low: close - 0.0003,
+    close,
+    volume: 1000,
+  }));
+}
 
 describe('formatPrice', () => {
   it('formats forex pairs with 5 decimals', () => {
@@ -66,6 +78,19 @@ describe('computeRSI', () => {
       expect(v).toBeGreaterThanOrEqual(0);
       expect(v).toBeLessThanOrEqual(100);
     });
+  });
+
+  it('returns 100 after the warmup when every lookback candle gains', () => {
+    const closes = Array.from({ length: 20 }, (_, i) => 1.08 + i * 0.001);
+    const rsi = computeRSI(makeTrendCandles(closes), 14);
+    expect(rsi[14]).toBe(100);
+    expect(rsi.slice(14).every((v) => v === 100)).toBe(true);
+  });
+
+  it('returns 50 after the warmup when prices are unchanged', () => {
+    const rsi = computeRSI(makeTrendCandles(Array(20).fill(1.08)), 14);
+    expect(rsi[14]).toBe(50);
+    expect(rsi.slice(14).every((v) => v === 50)).toBe(true);
   });
 });
 
