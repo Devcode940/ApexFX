@@ -427,7 +427,7 @@ export const ChartOverlays: React.FC<ChartOverlaysProps> = ({
               {hudData.rsi !== undefined && (
                 <div className="flex justify-between gap-4">
                   <span className="text-zinc-500">RSI(14)</span>
-                  <span className={`font-semibold ${hudData.rsi > 70 ? 'text-red-400' : hudData.rsi < 30 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <span className={`font-semibold ${hudData.rsi > 70 ? 'text-red-400' : hudData.rsi < 30 ? 'text-emerald-400' : 'text-zinc-300'}`}>
                     {hudData.rsi.toFixed(2)}
                   </span>
                 </div>

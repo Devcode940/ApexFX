@@ -8,7 +8,7 @@ export const PAIRS_CONFIG: Record<string, { name: string; pipDecimal: number; sp
   'USDCAD': { name: 'USD / CAD', pipDecimal: 4, spreadPips: 1.8 },
   'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2, spreadPips: 2.3 },
   'XAUUSD': { name: 'Gold / USD', pipDecimal: 2, spreadPips: 2.5 },
-  'XAGUSD': { name: 'Silver / USD', pipDecimal: 3, spreadPips: 2.0 },
+  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4, spreadPips: 2.0 },
 };
 
 // Contract size (base units per lot) per instrument. Forex standard lot = 100,000 units;
@@ -635,6 +635,8 @@ export function generateSignal(
       buyScore -= 5;
       rationale.push(`RSI indicates light distribution at ${latestRsi.toFixed(1)}, pointing to soft buyer presence.`);
     }
+  } else {
+    rationale.push('RSI data is not yet available for this timeframe (insufficient candles).');
   }
 
   // 3. Bollinger Bands channel position

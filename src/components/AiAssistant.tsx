@@ -53,7 +53,7 @@ export const AiAssistant: React.FC<AiAssistantProps> = () => {
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
     ]);
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, activeSignal]);
 
   // Handle scrolling after new message
   useEffect(() => {

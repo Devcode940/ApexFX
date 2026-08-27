@@ -134,20 +134,6 @@ export function useChartCore(params: UseChartCoreParams): void {
     const container = containerRef.current;
     if (!container || data.length === 0) return;
 
-    // Reset previous chart instances
-    if (chartRef.current) {
-      chartRef.current.remove();
-      chartRef.current = null;
-    }
-    if (rsiChartRef.current) {
-      rsiChartRef.current.remove();
-      rsiChartRef.current = null;
-    }
-    if (macdChartRef.current) {
-      macdChartRef.current.remove();
-      macdChartRef.current = null;
-    }
-
     const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
 
     // --- Main Chart ---
