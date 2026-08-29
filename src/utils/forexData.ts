@@ -82,11 +82,16 @@ export function computeEMA(data: Candlestick[], period = 50): (number | null)[] 
 }
 
 function calculateRsiValue(avgGain: number, avgLoss: number): number {
+  // Guard against non-finite inputs
+  if (!isFinite(avgGain) || !isFinite(avgLoss)) return 50;
   if (avgLoss === 0) return avgGain === 0 ? 50 : 100;
   if (avgGain === 0) return 0;
 
   const rs = avgGain / avgLoss;
-  return 100 - 100 / (1 + rs);
+  // Final safety: ensure result is always a valid finite number between 0-100
+  const result = 100 - 100 / (1 + rs);
+  if (!isFinite(result)) return 50;
+  return Math.max(0, Math.min(100, result));
 }
 
 export function computeRSI(data: Candlestick[], period = 14): (number | null)[] {
