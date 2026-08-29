@@ -64,13 +64,8 @@ export async function fetchTwelveDataQuotes(): Promise<Set<string>> {
   try {
     const symbols = Object.values(TD_SYMBOLS).join(',');
     const res = await fetchWithTimeout(
-      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${tdApiKey}`,
-        },
-        timeoutMs: 8000,
-      }
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbols)}&apikey=${tdApiKey}`,
+      { timeoutMs: 8000 }
     );
     const raw = await res.json();
     if ((raw as any)?.code) {

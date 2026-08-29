@@ -20,13 +20,8 @@ export async function fetchTwelveDataHistory(symbol: string, timeframe: string) 
   if (!tdInterval || !tdSymbol) return null;
   try {
     const res = await fetchWithTimeout(
-      `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&outputsize=800&timezone=UTC&order=asc`,
-      {
-        headers: {
-          Authorization: `Bearer ${tdApiKey}`,
-        },
-        timeoutMs: 8000,
-      }
+      `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&outputsize=800&timezone=UTC&order=asc&apikey=${tdApiKey}`,
+      { timeoutMs: 8000 }
     );
     const raw = await res.json();
     if ((raw as any)?.status === 'error' || (raw as any)?.code || !Array.isArray((raw as any).values)) {

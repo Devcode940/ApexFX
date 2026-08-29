@@ -120,9 +120,8 @@ function startTwelveDataStream() {
   const tdApiKey = process.env.TWELVEDATA_API_KEY;
   if (!tdApiKey || tdWs || process.env.VERCEL) return;
   try {
-    tdWs = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price`, {
+    tdWs = new WebSocket(`wss://ws.twelvedata.com/v1/quotes/price?apikey=${tdApiKey}`, {
       headers: {
-        Authorization: `Bearer ${tdApiKey}`,
         'User-Agent': 'ApexFX-Terminal/1.0 (Production)',
       },
     } as any);
@@ -664,12 +663,10 @@ app.get('/api/market/news', async (req, res) => {
     if (typeof category !== 'string' || !/^[a-z]{1,20}$/.test(category)) {
       return res.status(400).json({ error: 'Invalid category parameter' });
     }
-    const response = await fetchWithTimeout(`https://finnhub.io/api/v1/news?category=${encodeURIComponent(category)}`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-      timeoutMs: 6000,
-    });
+    const response = await fetchWithTimeout(
+      `https://finnhub.io/api/v1/news?category=${encodeURIComponent(category)}&token=${apiKey}`,
+      { timeoutMs: 6000 }
+    );
     if (!response.ok) throw new Error('Failed to fetch from Finnhub');
     const data = await response.json();
     res.json(data);
@@ -691,13 +688,8 @@ app.get('/api/market/quote', async (req, res) => {
       return res.status(400).json({ error: 'Invalid symbol format' });
     }
     const response = await fetchWithTimeout(
-      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol as string)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-        timeoutMs: 6000,
-      }
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol as string)}&apikey=${apiKey}`,
+      { timeoutMs: 6000 }
     );
     if (!response.ok) throw new Error('Failed to fetch from Twelve Data');
     const data = await response.json();
@@ -718,15 +710,10 @@ app.get('/api/market/forexrate', async (req, res) => {
     if (base && !/^[A-Z]{3}$/.test(base as string)) {
       return res.status(400).json({ error: 'Invalid base currency format' });
     }
-    const response = await fetchWithTimeout(`https://api.forexrateapi.com/v1/latest`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ base: base || 'USD' }),
-      timeoutMs: 6000,
-    });
+    const response = await fetchWithTimeout(
+      `https://api.forexrateapi.com/v1/latest?base=${encodeURIComponent(String(base || 'USD'))}&api_key=${apiKey}`,
+      { timeoutMs: 6000 }
+    );
     if (!response.ok) throw new Error('Failed to fetch from ForexRate API');
     const data = await response.json();
     res.json(data);
