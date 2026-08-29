@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import crypto from 'crypto';
+import { body, validationResult } from 'express-validator';
 
 // Modular imports
 import { log, warn, error as logError } from './server/lib/logger.js';
@@ -37,6 +38,18 @@ const PORT = (() => {
 })();
 
 const server = createServer(app);
+
+// --- Safe WebSocket send helper (prevents silent failures on closed sockets) ---
+function safeSend(ws: WebSocket | null | undefined, data: unknown): boolean {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    ws.send(JSON.stringify(data));
+    return true;
+  } catch (err) {
+    console.warn('[WS] safeSend failed:', (err as Error).message);
+    return false;
+  }
+}
 
 // --- Security: WebSocket server with origin check ---
 const ALLOWED_ORIGINS = getAllowedOrigins();
@@ -115,10 +128,10 @@ function startTwelveDataStream() {
     } as any);
     tdWs.on('open', () => {
       log('[TwelveData] WebSocket stream connected.');
-      tdWs?.send(JSON.stringify({ action: 'subscribe', params: { symbols: Object.values(TD_SYMBOLS).join(',') } }));
+      safeSend(tdWs, { action: 'subscribe', params: { symbols: Object.values(TD_SYMBOLS).join(',') } });
       tdWsHeartbeatTimer = setInterval(() => {
         try {
-          tdWs?.send(JSON.stringify({ action: 'heartbeat' }));
+          safeSend(tdWs, { action: 'heartbeat' });
         } catch {
           /* ignore */
         }
@@ -508,7 +521,21 @@ const CHAT_MAX_HISTORY = 30;
 const CHAT_MAX_MESSAGE_LEN = 8000;
 const CHAT_TIMEOUT_MS = 45_000;
 
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat',
+  [
+    body('messages').isArray({ min: 1 }).withMessage('messages must be a non-empty array'),
+    body('messages.*.text').optional().isString().trim().isLength({ max: 8000 }).withMessage('Message text too long'),
+    body('selectedSymbol').optional().trim().matches(/^[A-Z0-9/]{0,20}$/).withMessage('Invalid symbol format'),
+    body('selectedTimeframe').optional().trim().isIn(['1m','5m','15m','1H','4H','D','W','M']).withMessage('Invalid timeframe'),
+  ],
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'Validation failed', details: errors.array() });
+    }
+    next();
+  },
+  async (req, res) => {
   try {
     const { messages, selectedSymbol, selectedTimeframe, activeSignal } = req.body;
 

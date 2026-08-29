@@ -228,6 +228,23 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
     saveDrawings(symbol, drawings);
   }, [drawings, symbol]);
 
+  // --- Reset chart autoScale on symbol change ---
+  // Fixes: after manual zoom/pan, switching symbols left the chart
+  // locked on the old price range, appearing empty or misaligned.
+  useEffect(() => {
+    if (chartRef.current) {
+      try {
+        const mainSeries = (chartRef.current as any)._chartApi?.mainSeries?.();
+        if (mainSeries?.priceScale) {
+          mainSeries.priceScale().applyOptions({ autoScale: true });
+        }
+        chartRef.current.timeScale().fitContent();
+      } catch {
+        /* ignore — chart may not be fully initialized yet */
+      }
+    }
+  }, [symbol]);
+
   // --- Handlers ---
   const handleTakeSnapshot = useCallback(() => {
     if (chartRef.current) {
