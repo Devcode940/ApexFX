@@ -606,6 +606,18 @@ app.get('/api/market/history', async (req, res) => {
   }
 });
 
+// --- AI Status Check ---
+app.get('/api/ai/status', (req, res) => {
+  const clientKey = (req.headers['x-gemini-api-key'] as string | undefined)?.trim();
+  const hasServerKey = Boolean(process.env.GEMINI_API_KEY || openRouterApiKey);
+  const hasClientKey = Boolean(clientKey && clientKey.length > 10);
+  res.json({
+    available: hasServerKey || hasClientKey,
+    provider: hasClientKey ? 'gemini-user' : (process.env.GEMINI_API_KEY ? 'gemini' : (openRouterApiKey ? 'openrouter' : 'none')),
+    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  });
+});
+
 // --- /api/chat guardrails ---
 const CHAT_MAX_HISTORY = 30;
 const CHAT_MAX_MESSAGE_LEN = 8000;
@@ -628,8 +640,18 @@ app.post('/api/chat',
     try {
       const { messages, selectedSymbol, selectedTimeframe, activeSignal } = req.body;
 
-      if (!ai && !openRouterApiKey) {
-        return res.status(500).json({ error: 'AI service unavailable' });
+      const clientGeminiKey = (req.headers['x-gemini-api-key'] as string | undefined)?.trim();
+      const activeGeminiClient = clientGeminiKey
+        ? new GoogleGenAI({
+            apiKey: clientGeminiKey,
+            httpOptions: { headers: { 'User-Agent': 'ApexFX-Terminal/1.0 (Production)' } },
+          })
+        : ai;
+
+      if (!activeGeminiClient && !openRouterApiKey) {
+        return res.status(503).json({
+          error: 'Google Gemini API key is not configured. Please enter your Gemini API Key in the AI Co-Pilot settings (🔑) or set GEMINI_API_KEY in your .env file.',
+        });
       }
 
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -720,7 +742,34 @@ DISCLAIMER: These are experimental heuristic estimates, not financial advice. Wi
       if (contents[0].role !== 'user') contents[0].role = 'user';
 
       let text: string;
-      if (openRouterApiKey) {
+      if (activeGeminiClient) {
+        const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+        try {
+          const result = await Promise.race([
+            activeGeminiClient.models.generateContent({
+              model: geminiModel,
+              contents,
+              config: { systemInstruction: contextStr },
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Gemini request timed out after ${CHAT_TIMEOUT_MS / 1000}s.`)), CHAT_TIMEOUT_MS)
+            ),
+          ]);
+          text = (result as any).text || "I apologize, but I couldn't generate a response. Please try again.";
+        } catch (geminiErr: any) {
+          // If gemini-2.5-flash encounters a model endpoint issue, fallback to gemini-2.0-flash
+          if (geminiModel !== 'gemini-2.0-flash') {
+            const fallbackResult = await activeGeminiClient.models.generateContent({
+              model: 'gemini-2.0-flash',
+              contents,
+              config: { systemInstruction: contextStr },
+            });
+            text = (fallbackResult as any).text || "I apologize, but I couldn't generate a response. Please try again.";
+          } else {
+            throw geminiErr;
+          }
+        }
+      } else if (openRouterApiKey) {
         text = await Promise.race([
           generateOpenRouter(contextStr, contents),
           new Promise<never>((_, reject) =>
@@ -728,13 +777,7 @@ DISCLAIMER: These are experimental heuristic estimates, not financial advice. Wi
           ),
         ]);
       } else {
-        const result = await Promise.race([
-          ai!.models.generateContent({ model: 'gemini-2.0-flash', contents, config: { systemInstruction: contextStr } }),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Gemini request timed out after ${CHAT_TIMEOUT_MS / 1000}s.`)), CHAT_TIMEOUT_MS)
-          ),
-        ]);
-        text = (result as any).text || "I apologize, but I couldn't generate a response. Please try again.";
+        throw new Error('No AI provider available.');
       }
 
       res.json({ text });

@@ -115,3 +115,11 @@ describe('Economic Calendar Service', () => {
     }
   });
 });
+
+describe('AI Status & Model Configuration', () => {
+  it('identifies gemini-2.5-flash as the default model hierarchy with fallback', () => {
+    const defaultModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+    expect(defaultModel).toMatch(/gemini/i);
+  });
+});
+

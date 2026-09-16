@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Sun,
   Calendar,
+  KeyRound,
 } from 'lucide-react';
 
 import { useTrading } from '../context/TradingContext';
@@ -51,6 +52,25 @@ export const AiAssistant: React.FC = () => {
   const [inputText, setInputText] = useState<string>('');
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const [activeCategory, setActiveCategory] = useState<TemplateCategory>('analysis');
+  const [geminiKey, setGeminiKey] = useState<string>(() => {
+    return typeof window !== 'undefined' ? localStorage.getItem('apexfx_gemini_api_key') || '' : '';
+  });
+  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
+  const [keyInput, setKeyInput] = useState<string>('');
+  const [serverAiConfigured, setServerAiConfigured] = useState<boolean>(false);
+
+  // Check if server already has GEMINI_API_KEY set
+  useEffect(() => {
+    fetch('/api/ai/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.configured) {
+          setServerAiConfigured(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasInitializedContextRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>(messages);
@@ -114,9 +134,14 @@ export const AiAssistant: React.FC = () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 50000);
 
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (geminiKey.trim()) {
+        headers['x-gemini-api-key'] = geminiKey.trim();
+      }
+
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           messages: updatedMessages.map((m) => ({ sender: m.sender, text: m.text, image: m.image })),
           selectedSymbol: symbol,
@@ -147,13 +172,36 @@ export const AiAssistant: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden h-full" id="ai_assistant_component">
+    <div className="flex flex-col bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden h-full relative" id="ai_assistant_component">
       <div className="px-4 py-3 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Bot className="w-4 h-4 text-emerald-400" />
           <h2 className="font-display font-semibold text-sm tracking-wide uppercase text-zinc-200">AI Co-Pilot Strategist</h2>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setKeyInput(geminiKey);
+              setShowKeyModal(true);
+            }}
+            title={
+              geminiKey
+                ? 'Client Gemini API Key configured'
+                : serverAiConfigured
+                ? 'Server Gemini API Key active (click to override)'
+                : 'Configure Google Gemini API Key'
+            }
+            className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1.5 transition-all border cursor-pointer ${
+              geminiKey || serverAiConfigured
+                ? 'bg-emerald-950/60 text-emerald-400 border-emerald-500/30 hover:bg-emerald-900/60'
+                : 'bg-amber-950/40 text-amber-300 border-amber-500/40 hover:bg-amber-900/40'
+            }`}
+          >
+            <KeyRound className="w-3 h-3 text-emerald-400" />
+            <span className="hidden sm:inline">
+              {geminiKey ? 'Gemini Custom' : serverAiConfigured ? 'Gemini Live' : 'Set Gemini Key'}
+            </span>
+          </button>
           <div className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-400">
             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
             <span>Context: {symbol} ({timeframe})</span>
@@ -313,6 +361,94 @@ export const AiAssistant: React.FC = () => {
         <input type="text" disabled={isTyping} placeholder={isTyping ? 'AI is thinking…' : 'Ask AI Analyst (e.g. \"RSI check\", \"Support lines\")...'} value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-zinc-950 text-xs border border-zinc-800 focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed" />
         <button type="submit" disabled={isTyping} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-3.5 py-2 transition-all flex items-center justify-center cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
       </form>
+
+      {/* Gemini API Key Configuration Modal Overlay */}
+      {showKeyModal && (
+        <div className="absolute inset-0 z-50 bg-zinc-950/90 backdrop-blur-sm p-4 flex flex-col justify-center items-center">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 w-full max-w-sm space-y-3.5 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-emerald-400" />
+                <h3 className="font-display font-semibold text-xs text-zinc-100 tracking-wide">Google Gemini AI Configuration</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowKeyModal(false)}
+                className="text-zinc-500 hover:text-zinc-300 p-1 rounded"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-[11px] text-zinc-400 font-sans leading-relaxed">
+              ApexFX AI Co-Pilot uses <strong className="text-zinc-200">Google Gemini 2.5 Flash</strong> with multimodal chart vision.
+              {serverAiConfigured ? (
+                <span className="block mt-1 text-emerald-400 font-mono text-[10px]">
+                  ✓ Default server GEMINI_API_KEY is currently connected. You may provide a custom key below to override it.
+                </span>
+              ) : (
+                <span className="block mt-1 text-zinc-400 text-[10px]">
+                  Provide your Gemini API key to activate instant AI chart analysis and macro briefings. Keys remain securely on your client.
+                </span>
+              )}
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] text-zinc-400 uppercase font-mono font-bold tracking-wider">
+                Gemini API Key
+              </label>
+              <input
+                type="password"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-2 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500 font-mono"
+              />
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <a
+                href="https://aistudio.google.com/app/apikey"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] text-emerald-400 hover:text-emerald-300 underline font-mono flex items-center gap-1"
+              >
+                Get free key at AI Studio ↗
+              </a>
+              <div className="flex gap-2 font-mono">
+                {geminiKey && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      localStorage.removeItem('apexfx_gemini_api_key');
+                      setGeminiKey('');
+                      setKeyInput('');
+                      setShowKeyModal(false);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:text-rose-400 text-[11px] font-bold transition-colors cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const trimmed = keyInput.trim();
+                    if (trimmed) {
+                      localStorage.setItem('apexfx_gemini_api_key', trimmed);
+                      setGeminiKey(trimmed);
+                    }
+                    setShowKeyModal(false);
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors cursor-pointer shadow-lg shadow-emerald-950/40"
+                >
+                  Save Key
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
