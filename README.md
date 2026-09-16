@@ -10,22 +10,24 @@ ApexFX Terminal is a high-performance, next-generation **multi-confluence Forex 
 
 ### 1. Real-Time Data Pipeline
 * **Multi-Provider Dual-Streaming Engine**: live WebSocket updates plus a reliable background HTTP polling fallback, so the price feed stays active even behind restrictive firewalls or through connection drops.
-* **Zero-Auth Primary Backbone — Deriv Public Stream**: connects out of the box to Deriv's public market feed (`wss://ws.derivws.com/websockets/v3?app_id=1089`) without requiring any API key. Streams live ticks for all 8 instruments including Gold (`XAU/USD`) and Silver (`XAG/USD`) with sub-second latency.
+* **Zero-Auth Primary Backbone — Deriv Public Stream**: connects out of the box to Deriv's public market feed (`wss://ws.derivws.com/websockets/v3?app_id=1089`) without requiring any API key. Streams live ticks for all instruments including Gold (`XAU/USD`), Silver (`XAG/USD`), and crypto with sub-second latency.
 * **Tiingo FX Feed (Optional, Recommended)**: when `TIINGO_API_KEY` is configured, streams Top-of-Book quotes and fetches institutional tier-1 historical candlestick bars (`1min` through `1day` back to 2020) via REST or WebSocket firehose (`wss://api.tiingo.com/fx`).
 * **Twelve Data (Optional)**: when `TWELVEDATA_API_KEY` is set, provides Twelve Data quote sync and streaming.
-* **Covered instruments**: `EUR/USD`, `GBP/USD`, `USD/JPY`, `AUD/USD`, `USD/CAD`, `GBP/JPY`, plus precious metals `XAU/USD` (Gold) and `XAG/USD` (Silver).
-* **Secondary rate sync & Macro Endpoints**: provides ForexFactory economic calendar (`/api/market/calendar`) and live multi-currency strength matrix (`/api/market/strength`).
+* **Covered instruments**: 14 active markets including `EUR/USD`, `GBP/USD`, `USD/JPY`, `AUD/USD`, `USD/CAD`, `GBP/JPY`, `EUR/GBP`, `USD/CHF`, `NZD/USD`, `EUR/JPY`, precious metals `XAU/USD` (Gold) and `XAG/USD` (Silver), plus `BTC/USD` and `ETH/USD`.
+* **Secondary rate sync & Macro Endpoints**: provides live ForexFactory economic calendar (`/api/market/calendar`), 8-currency relative strength matrix (`/api/market/strength`), and sovereign macro benchmark rate differentials (`/api/market/macro`).
 
 ### 2. High-Precision Charting & Confluence Overlays
-* **Real historical candlesticks**: live price history from Yahoo Finance for `1m`, `5m`, `15m`, `1H`, `4H` (aggregated from hourly data server-side), and `D`.
+* **Real historical candlesticks**: live price history from Yahoo Finance and Deriv for `1m`, `5m`, `15m`, `1H`, `4H`, and `D`.
 * **Built on lightweight-charts v5** with a modular chart core (`src/hooks/useChartCore.ts`, `src/utils/chart/`, `src/components/chart/`):
+  * **Fullscreen Focus Mode**: one-click toggle to focus exclusively on the chart UI across both portrait and landscape mobile/desktop orientations, hiding all auxiliary headers, sidebars, and tab overlays while preserving 100% viewport canvas estate.
+  * **Zero Canvas Teardown Resizing**: responsive canvas resizing dynamically decoupled from series teardown, eliminating flicker and preserving viewport zoom/pan levels on orientation changes.
   * **Multi-Indicator Confluence Matrix**: quick-toggle overlays for SMA & EMA, RSI, MACD, and Bollinger Bands, plus automatic Fibonacci retracement levels.
   * **Candlestick pattern markers**: bullish/bearish/neutral formations (Engulfing, Hammer, Shooting Star, Doji, Morning/Evening Star) rendered as markers with win-rate scoring.
   * **Session range HUD**: custom session shading for Tokyo/London/New York/Sydney hours.
   * **ATR volatility HUD**: live risk classification (LOW / MEDIUM / HIGH) relative to historical norms.
-  * **Drawing tools**: horizontal support/resistance lines, trendlines, annotations, Risk/Reward rectangles, and Fibonacci retracements — persisted per symbol in `localStorage`.
+  * **Drawing tools**: horizontal support/resistance lines, trendlines, annotations, Risk/Reward rectangles, parallel channels, and Fibonacci retracements — persisted per symbol in `localStorage`.
   * **Trade animations**: open positions and closed trades overlaid on the chart.
-* **Chart snapshots**: one-click screenshot copied to clipboard and attachable to the AI assistant.
+* **Chart snapshots**: one-click screenshot copied to clipboard via modern `navigator.clipboard` and attachable to the AI assistant.
 
 ### 3. Integrated AI Assistant
 * **Real AI engine — Gemini or OpenRouter**: built-in chat container with recent conversation history (server caps at the last 30 messages), chart-image understanding, and automatic market context injection (active symbol, timeframe, latest signal, indicators). Uses `gemini-3.5-flash` via `@google/genai` by default; setting `OPENROUTER_API_KEY` routes chat through OpenRouter instead (`OPENROUTER_MODEL`, default `openrouter/auto`).
@@ -111,9 +113,12 @@ All endpoints return JSON and are safe to call from Postman, `curl`, or any HTTP
 
 | Endpoint | Method | Description | Requires key |
 |---|---|---|---|
-| `/api/market/prices` | GET | Live watchlist prices (all 8 instruments) — Twelve Data when configured, else Yahoo Finance | — |
-| `/api/market/history?symbol=EURUSD&timeframe=1H` | GET | Real historical candlesticks (`1m`/`5m`/`15m`/`1H`/`4H`/`D`) — Twelve Data when configured, else Yahoo Finance | — |
-| `/api/forex` | GET | ECB exchange rates via Frankfurter (USD base) | — |
+| `/api/market/prices` | GET | Live watchlist prices (all 14 instruments) — Deriv/Twelve Data/Yahoo | — |
+| `/api/market/history?symbol=EURUSD&timeframe=1H` | GET | Real historical candlesticks (`1m`/`5m`/`15m`/`1H`/`4H`/`D`) — Deriv/Twelve Data/Yahoo | — |
+| `/api/market/calendar` | GET | Live ForexFactory economic calendar with impact filters and zero dummy data | — |
+| `/api/market/strength` | GET | 8-currency relative strength matrix (`EUR`, `USD`, `GBP`, `JPY`, `AUD`, `CAD`, `CHF`, `NZD`) | — |
+| `/api/market/macro?symbol=EURUSD` | GET | Central bank benchmark policy rates, carry yield spread differential, and FX macro sentiment | — |
+| `/api/forex` | GET | ECB exchange rates via Frankfurter (with server watchlist cache fallback) | — |
 | `/api/market/news?category=forex` | GET | Macro news headlines (Finnhub) | `FINNHUB_API_KEY` |
 | `/api/market/quote?symbol=EUR/USD` | GET | Real-time quote cross-check (Twelve Data) | `TWELVEDATA_API_KEY` |
 | `/api/market/forexrate?base=USD` | GET | Rate cross-check (ForexRate API) | `FOREXRATE_API_KEY` |

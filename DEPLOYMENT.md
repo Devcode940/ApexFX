@@ -141,10 +141,13 @@ services:
 ## Monitoring & Maintenance
 
 **Health Checks:**
-- Monitor `/api/health` endpoint for uptime, WS client count, watchlist size
-- Monitor `/api/forex` endpoint for external API availability
-- Watch WebSocket connection counts
-- Track rate limit hits (429 responses)
+- Monitor `/api/health` endpoint for uptime, WS client count, watchlist size, and provider connectivity (Deriv, Tiingo, Twelve Data, Yahoo).
+- Monitor `/api/market/calendar` for ForexFactory feed availability.
+- Monitor `/api/market/strength` for 8-currency matrix calculation health.
+- Monitor `/api/market/macro?symbol=EURUSD` for sovereign benchmark rates and FX Risk-On/Risk-Off posture.
+- Monitor `/api/forex` endpoint for external API availability.
+- Watch WebSocket connection counts.
+- Track rate limit hits (429 responses).
 
 **Logs to Monitor:**
 - Twelve Data API errors (rate limits, credential issues)

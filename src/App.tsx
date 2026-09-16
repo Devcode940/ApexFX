@@ -44,6 +44,7 @@ function TradingTerminal() {
     isPending,
     startTransition,
     selectedSymbol,
+    setSelectedSymbol,
     selectedTimeframe,
     setSelectedTimeframe,
     indicators,
