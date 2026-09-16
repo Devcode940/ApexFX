@@ -1,6 +1,11 @@
 -- SUPABASE DATABASE SCHEMA & POLICIES
 -- Copy and run this in your Supabase SQL Editor (https://supabase.com)
 
+-- Performance indexes for RLS-filtered queries
+CREATE INDEX IF NOT EXISTS idx_positions_user ON public.positions(user_id);
+CREATE INDEX IF NOT EXISTS idx_closed_trades_user_time ON public.closed_trades(user_id, close_time DESC);
+CREATE INDEX IF NOT EXISTS idx_drawings_user_symbol ON public.drawings(user_id, symbol);
+
 -- 1. Create drawings table
 CREATE TABLE IF NOT EXISTS public.drawings (
     id TEXT PRIMARY KEY,

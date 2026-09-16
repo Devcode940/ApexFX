@@ -3,7 +3,6 @@ import {
   IChartApi,
   ISeriesApi,
   IPriceLine,
-  CandlestickSeries,
   LineSeries,
   HistogramSeries,
   ColorType,
@@ -14,8 +13,7 @@ import {
   SeriesMarkerBar,
   LineData,
   BarData,
-  HistogramData,
-} from 'lightweight-charts';
+  HistogramData } from 'lightweight-charts';
 import type { Candlestick, Pattern } from '../../types';
 import type { AnnotationDrawing, ChartTheme, ChartPoint, DrawingsState } from '../../types/chart';
 import {
@@ -25,8 +23,7 @@ import {
   computeMACD,
   computeRSI,
   computeFibonacci,
-  PAIRS_CONFIG,
-} from '../forexData';
+  PAIRS_CONFIG } from '../forexData';
 
 export interface ChartThemeColors {
   background: string;
@@ -50,26 +47,20 @@ export function createMainChart(container: HTMLDivElement, height: number, theme
     height,
     layout: {
       background: { type: ColorType.Solid, color: colors.background },
-      textColor: colors.text,
-    },
+      textColor: colors.text },
     grid: {
       vertLines: { color: colors.grid },
-      horzLines: { color: colors.grid },
-    },
+      horzLines: { color: colors.grid } },
     rightPriceScale: {
       borderColor: colors.border,
-      autoScale: true,
-    },
+      autoScale: true },
     timeScale: {
       borderColor: colors.border,
       timeVisible: true,
-      secondsVisible: false,
-    },
+      secondsVisible: false },
     crosshair: {
       horzLine: { labelBackgroundColor: colors.crosshairLabelBackground },
-      vertLine: { labelBackgroundColor: colors.crosshairLabelBackground },
-    },
-  });
+      vertLine: { labelBackgroundColor: colors.crosshairLabelBackground } } });
 }
 
 /** Linked sub-chart (RSI / MACD) with hidden time scale. */
@@ -80,25 +71,20 @@ export function createSubChart(container: HTMLDivElement, height: number, theme:
     height,
     layout: {
       background: { type: ColorType.Solid, color: colors.background },
-      textColor: colors.text,
-    },
+      textColor: colors.text },
     grid: {
       vertLines: { color: colors.grid },
-      horzLines: { color: colors.grid },
-    },
+      horzLines: { color: colors.grid } },
     rightPriceScale: {
       borderColor: colors.border,
       autoScale,
-      ...(autoScale ? {} : { scaleMargins: { top: 0.1, bottom: 0.1 } }),
-    },
+      ...(autoScale ? {} : { scaleMargins: { top: 0.1, bottom: 0.1 } }) },
     timeScale: {
       visible: false, // hidden since linked to main
     },
     crosshair: {
       horzLine: { labelBackgroundColor: colors.crosshairLabelBackground },
-      vertLine: { labelBackgroundColor: colors.crosshairLabelBackground },
-    },
-  });
+      vertLine: { labelBackgroundColor: colors.crosshairLabelBackground } } });
 }
 
 export interface CandlestickPoint {
@@ -115,8 +101,7 @@ export function toCandlestickData(data: Candlestick[]): CandlestickPoint[] {
     open: item.open,
     high: item.high,
     low: item.low,
-    close: item.close,
-  }));
+    close: item.close }));
 }
 
 export function toLineValues(data: Candlestick[], values: (number | null)[]): LineData[] {
@@ -136,8 +121,7 @@ export function createSmaSeries(chart: IChartApi, data: Candlestick[]): ISeriesA
     color: '#3b82f6',
     lineWidth: 2,
     title: 'SMA (20)',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
   const values = toLineValues(data, sma);
   if (values.length > 0) series.setData(values);
   return series;
@@ -149,8 +133,7 @@ export function createEmaSeries(chart: IChartApi, data: Candlestick[]): ISeriesA
     color: '#eab308',
     lineWidth: 2,
     title: 'EMA (50)',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
   const values = toLineValues(data, ema);
   if (values.length > 0) series.setData(values);
   return series;
@@ -170,8 +153,7 @@ export function createBollingerSeries(chart: IChartApi, data: Candlestick[]): Bo
     lineWidth: 1,
     lineStyle: LineStyle.Dashed,
     title: 'BB Upper',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
   upper.setData(toLineValues(data, bb.upper));
 
   const lower = chart.addSeries(LineSeries, {
@@ -179,16 +161,14 @@ export function createBollingerSeries(chart: IChartApi, data: Candlestick[]): Bo
     lineWidth: 1,
     lineStyle: LineStyle.Dashed,
     title: 'BB Lower',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
   lower.setData(toLineValues(data, bb.lower));
 
   const basis = chart.addSeries(LineSeries, {
     color: 'rgba(168, 85, 247, 0.3)',
     lineWidth: 1,
     title: 'BB Basis',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
   basis.setData(toLineValues(data, bb.basis));
 
   return { upper, lower, basis };
@@ -210,8 +190,7 @@ export function createFibonacciPriceLines(
     r236: '#fda4af',
     r382: '#f0abfc',
     r500: '#c084fc',
-    r618: '#818cf8',
-  };
+    r618: '#818cf8' };
 
   const lines: IPriceLine[] = [];
   const drawFibLine = (price: number, label: string, color: string) => {
@@ -222,8 +201,7 @@ export function createFibonacciPriceLines(
         lineWidth: 1,
         lineStyle: LineStyle.Dotted,
         axisLabelVisible: true,
-        title: label,
-      })
+        title: label })
     );
   };
 
@@ -250,8 +228,7 @@ export function createRsiSubChart(
     color: '#f43f5e',
     lineWidth: 2,
     title: 'RSI (14)',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
 
   series.createPriceLine({
     price: 70,
@@ -259,16 +236,14 @@ export function createRsiSubChart(
     lineWidth: 1,
     lineStyle: LineStyle.Dashed,
     title: 'Overbought (70)',
-    axisLabelVisible: true,
-  });
+    axisLabelVisible: true });
   series.createPriceLine({
     price: 30,
     color: 'rgba(34, 197, 94, 0.4)',
     lineWidth: 1,
     lineStyle: LineStyle.Dashed,
     title: 'Oversold (30)',
-    axisLabelVisible: true,
-  });
+    axisLabelVisible: true });
 
   series.setData(toLineValues(data, computeRSI(data, 14)));
   return chart;
@@ -296,22 +271,19 @@ export function createMacdSubChart(
     color: '#3b82f6',
     lineWidth: 2,
     title: 'MACD',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
   macd.setData(toLineValues(data, macdData.macd));
 
   const signal = chart.addSeries(LineSeries, {
     color: '#eab308',
     lineWidth: 2,
     title: 'Signal',
-    priceLineVisible: false,
-  });
+    priceLineVisible: false });
   signal.setData(toLineValues(data, macdData.signal));
 
   const histogram = chart.addSeries(HistogramSeries, {
     priceLineVisible: false,
-    title: 'Histogram',
-  });
+    title: 'Histogram' });
   const histData: (HistogramData & { time: UTCTimestamp })[] = [];
   for (let i = 0; i < data.length; i++) {
     const value = macdData.histogram[i];
@@ -319,8 +291,7 @@ export function createMacdSubChart(
       histData.push({
         time: data[i].time as UTCTimestamp,
         value,
-        color: value >= 0 ? 'rgba(34, 197, 94, 0.45)' : 'rgba(239, 68, 68, 0.45)',
-      });
+        color: value >= 0 ? 'rgba(34, 197, 94, 0.45)' : 'rgba(239, 68, 68, 0.45)' });
     }
   }
   histogram.setData(histData);
@@ -352,8 +323,7 @@ export function buildChartMarkers(input: ChartMarkerInput): ChartMarker[] {
       color: p.type === 'bullish' ? '#10b981' : p.type === 'bearish' ? '#f43f5e' : '#a1a1aa',
       shape: p.type === 'bullish' ? 'arrowUp' : p.type === 'bearish' ? 'arrowDown' : 'circle',
       text: `${isHighlighted ? '⭐ ' : ''}${iconPrefix} ${p.name}${winRateText}`,
-      size: isHighlighted ? 2.8 : 1.5,
-    });
+      size: isHighlighted ? 2.8 : 1.5 });
   }
 
   for (const ann of input.annotations) {
@@ -363,8 +333,7 @@ export function buildChartMarkers(input: ChartMarkerInput): ChartMarker[] {
       color: ann.color || '#a855f7',
       shape: 'square',
       text: ann.text,
-      size: 1.5,
-    });
+      size: 1.5 });
   }
 
   if (input.trendlineStart) {
@@ -374,8 +343,7 @@ export function buildChartMarkers(input: ChartMarkerInput): ChartMarker[] {
       color: input.trendlineStartColor,
       shape: 'circle',
       text: 'TL START 🔍',
-      size: 1.2,
-    });
+      size: 1.2 });
   }
 
   return markers;
@@ -388,15 +356,21 @@ export function buildChartMarkers(input: ChartMarkerInput): ChartMarker[] {
 export function syncTimeScales(mainChart: IChartApi, subCharts: IChartApi[]): () => void {
   const mainTimeScale = mainChart.timeScale();
   const cleanup: (() => void)[] = [];
+  // Guard flag prevents ping-pong feedback loops when setting range from subscriber
+  let applyingSync = false;
 
   for (const subChart of subCharts) {
     const subTimeScale = subChart.timeScale();
 
     const fromMain = (range: LogicalRange | null) => {
-      if (range) subTimeScale.setVisibleLogicalRange(range);
+      if (applyingSync || !range) return;
+      applyingSync = true;
+      try { subTimeScale.setVisibleLogicalRange(range); } finally { applyingSync = false; }
     };
     const fromSub = (range: LogicalRange | null) => {
-      if (range) mainTimeScale.setVisibleLogicalRange(range);
+      if (applyingSync || !range) return;
+      applyingSync = true;
+      try { mainTimeScale.setVisibleLogicalRange(range); } finally { applyingSync = false; }
     };
 
     mainTimeScale.subscribeVisibleLogicalRangeChange(fromMain);

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NewsItem } from '../types';
-import { Globe, HeartHandshake, RefreshCw, AlertTriangle, Loader2 } from 'lucide-react';
+import { Globe, AlertTriangle, Loader2 } from 'lucide-react';
 
 
 import { useTrading } from '../context/TradingContext';
@@ -58,8 +58,7 @@ export const NewsPanel: React.FC<NewsPanelProps> = React.memo(() => {
               time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               impact: 'MEDIUM',
               affectedPairs: pairs,
-              sentiment: 'neutral',
-            };
+              sentiment: 'neutral' };
           });
           if (!controller.signal.aborted) setNews(formattedNews);
         }
