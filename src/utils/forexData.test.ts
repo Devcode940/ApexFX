@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Candlestick } from '../types';
 import { formatPrice, getContractSize, computeSMA, computeRSI, calculateVolatilityDetails, detectPatterns, generateSignal } from './forexData';
+import { calculateConfluenceScore } from './confluenceEngine';
 /** Deterministic candles for unit tests only (never used in the app). */
 function makeCandles(count: number, startPrice = 1.08): Candlestick[] {
   const out: Candlestick[] = [];
@@ -47,6 +48,10 @@ describe('formatPrice', () => {
 describe('getContractSize', () => {
   it('uses 100,000 units for forex', () => {
     expect(getContractSize('EURUSD')).toBe(100000);
+    expect(getContractSize('EURGBP')).toBe(100000);
+    expect(getContractSize('USDCHF')).toBe(100000);
+    expect(getContractSize('NZDUSD')).toBe(100000);
+    expect(getContractSize('EURJPY')).toBe(100000);
   });
 
   it('uses 100 troy oz per lot for gold', () => {
@@ -55,6 +60,11 @@ describe('getContractSize', () => {
 
   it('uses 5,000 troy oz per lot for silver', () => {
     expect(getContractSize('XAGUSD')).toBe(5000);
+  });
+
+  it('uses 1 unit per lot for BTC and 1 unit for ETH', () => {
+    expect(getContractSize('BTCUSD')).toBe(1);
+    expect(getContractSize('ETHUSD')).toBe(1);
   });
 });
 
@@ -138,5 +148,34 @@ describe('generateSignal', () => {
       expect(signal.tp).toBeGreaterThan(0);
       expect(signal.sl).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('calculateConfluenceScore', () => {
+  it('computes 4-layer quantitative confluence bounded between 0 and 100', () => {
+    const data = makeCandles(60);
+    const patterns = detectPatterns(data);
+    const indicatorsState = {
+      sma: true,
+      ema: true,
+      rsi: true,
+      macd: true,
+      bollinger: true,
+      fibonacci: false,
+    };
+
+    const confluence = calculateConfluenceScore(data, patterns, indicatorsState, 7.8, 3.2, -1.22);
+    expect(confluence.totalScore).toBeGreaterThanOrEqual(0);
+    expect(confluence.totalScore).toBeLessThanOrEqual(100);
+    expect(['STRONG BUY', 'MODERATE BUY', 'NEUTRAL', 'MODERATE SELL', 'STRONG SELL']).toContain(confluence.verdict);
+    expect(confluence.technicalScore).toBeGreaterThanOrEqual(-35);
+    expect(confluence.technicalScore).toBeLessThanOrEqual(35);
+    expect(confluence.patternScore).toBeGreaterThanOrEqual(-25);
+    expect(confluence.patternScore).toBeLessThanOrEqual(25);
+    expect(confluence.strengthScore).toBeGreaterThanOrEqual(-20);
+    expect(confluence.strengthScore).toBeLessThanOrEqual(20);
+    expect(confluence.macroScore).toBeGreaterThanOrEqual(-20);
+    expect(confluence.macroScore).toBeLessThanOrEqual(20);
+    expect(confluence.reasons.length).toBeGreaterThan(0);
   });
 });

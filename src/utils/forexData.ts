@@ -7,14 +7,24 @@ export const PAIRS_CONFIG: Record<string, { name: string; pipDecimal: number; sp
   'AUDUSD': { name: 'AUD / USD', pipDecimal: 4, spreadPips: 1.5 },
   'USDCAD': { name: 'USD / CAD', pipDecimal: 4, spreadPips: 1.8 },
   'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2, spreadPips: 2.3 },
+  'EURGBP': { name: 'EUR / GBP', pipDecimal: 4, spreadPips: 1.4 },
+  'USDCHF': { name: 'USD / CHF', pipDecimal: 4, spreadPips: 1.5 },
+  'NZDUSD': { name: 'NZD / USD', pipDecimal: 4, spreadPips: 1.8 },
+  'EURJPY': { name: 'EUR / JPY', pipDecimal: 2, spreadPips: 1.6 },
   'XAUUSD': { name: 'Gold / USD', pipDecimal: 2, spreadPips: 2.5 },
-  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4, spreadPips: 2.0 } };
+  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4, spreadPips: 2.0 },
+  'BTCUSD': { name: 'Bitcoin / USD', pipDecimal: 1, spreadPips: 15.0 },
+  'ETHUSD': { name: 'Ethereum / USD', pipDecimal: 2, spreadPips: 2.0 },
+};
 
 // Contract size (base units per lot) per instrument. Forex standard lot = 100,000 units;
-// Gold = 100 troy oz per lot, Silver = 5,000 troy oz per lot.
+// Gold = 100 troy oz per lot, Silver = 5,000 troy oz per lot; Crypto = 1 coin per lot.
 export const CONTRACT_SIZE: Record<string, number> = {
   'XAUUSD': 100,
-  'XAGUSD': 5000 };
+  'XAGUSD': 5000,
+  'BTCUSD': 1,
+  'ETHUSD': 1,
+};
 
 export function getContractSize(symbol: string): number {
   return CONTRACT_SIZE[symbol] || 100000;

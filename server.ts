@@ -26,6 +26,21 @@ import {
   isTdRestCoolingDown,
 } from './server/services/market.js';
 import { fetchMarketHistory } from './server/services/yahoo.js';
+import {
+  startDerivStream,
+  stopDerivStream,
+  setDerivPriceUpdateCallback,
+  isDerivConnected,
+} from './server/services/deriv.js';
+import {
+  startTiingoStream,
+  stopTiingoStream,
+  setTiingoPriceUpdateCallback,
+  getTiingoApiKey,
+} from './server/services/tiingo.js';
+import { fetchEconomicCalendar } from './server/services/calendar.js';
+import { calculateCurrencyStrength } from './server/services/strength.js';
+import { getMacroOverview } from './server/services/macro.js';
 
 dotenv.config();
 
@@ -220,10 +235,26 @@ function startBackgroundFeeds() {
   }, 60_000);
   if (tdWsCleanupTokensInterval.unref) tdWsCleanupTokensInterval.unref();
 
+  // Price broadcast listeners for Deriv & Tiingo
+  setDerivPriceUpdateCallback(() => {
+    broadcastPrices();
+  });
+  setTiingoPriceUpdateCallback(() => {
+    broadcastPrices();
+  });
+
   fetchRealLatestPrices().then(() => {
     log('[Server] Successfully synchronized initial real Forex and Commodity quotes.');
     broadcastPrices();
   });
+
+  // Start Deriv public WebSocket feed (100% free streaming ticks, zero key needed)
+  startDerivStream();
+
+  // Start Tiingo stream if API key is provided
+  if (getTiingoApiKey()) {
+    startTiingoStream();
+  }
 
   const tdApiKey = process.env.TWELVEDATA_API_KEY;
   if (tdApiKey) {
@@ -241,6 +272,8 @@ function startBackgroundFeeds() {
 }
 
 function stopBackgroundFeeds() {
+  stopDerivStream();
+  stopTiingoStream();
   if (tdWsHeartbeatTimer) { clearInterval(tdWsHeartbeatTimer); tdWsHeartbeatTimer = null; }
   if (tdWsReconnectTimer) { clearTimeout(tdWsReconnectTimer); tdWsReconnectTimer = null; }
   if (tdWsCleanupTokensInterval) { clearInterval(tdWsCleanupTokensInterval); tdWsCleanupTokensInterval = null; }
@@ -325,8 +358,48 @@ app.get('/api/health', (_req, res) => {
     uptime: process.uptime(),
     watchlist: serverWatchlist.length,
     wsClients: wss ? wss.clients.size : 0,
+    providers: {
+      deriv: isDerivConnected(),
+      tiingo: Boolean(getTiingoApiKey()),
+      twelvedata: Boolean(process.env.TWELVEDATA_API_KEY),
+      yahoo: true,
+    },
     env: process.env.NODE_ENV || 'development',
   });
+});
+
+// --- Economic Calendar (ForexFactory Free Weekly Feed) ---
+app.get('/api/market/calendar', async (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  try {
+    const calendar = await fetchEconomicCalendar();
+    res.json({ success: true, count: calendar.length, data: calendar });
+  } catch (_e) {
+    res.status(500).json({ success: false, error: 'Failed to fetch economic calendar' });
+  }
+});
+
+// --- Currency Strength Matrix ---
+app.get('/api/market/strength', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const strength = calculateCurrencyStrength();
+    res.json({ success: true, data: strength });
+  } catch (_e) {
+    res.status(500).json({ success: false, error: 'Failed to calculate currency strength' });
+  }
+});
+
+// --- Macro & Central Bank Policy Overview ---
+app.get('/api/market/macro', async (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=120');
+  try {
+    const symbol = String(req.query.symbol || 'EURUSD');
+    const overview = await getMacroOverview(symbol);
+    res.json({ success: true, data: overview });
+  } catch (_e) {
+    res.status(500).json({ success: false, error: 'Failed to fetch macro data' });
+  }
 });
 
 // --- Secured WS token endpoint ---
@@ -564,13 +637,31 @@ app.post('/api/chat',
       const safeSymbol = typeof selectedSymbol === 'string' ? selectedSymbol.replace(/[^A-Z0-9\\/]/g, '').slice(0, 20) : 'EURUSD';
       const safeTimeframe = typeof selectedTimeframe === 'string' && ['1m', '5m', '15m', '1H', '4H', 'D'].includes(selectedTimeframe) ? selectedTimeframe : '1H';
 
+      // Inject upcoming high-impact ForexFactory events for this pair
+      let upcomingEventsStr = 'None scheduled';
+      try {
+        const events = await fetchEconomicCalendar();
+        const baseCurr = safeSymbol.slice(0, 3);
+        const quoteCurr = safeSymbol.slice(3, 6);
+        const relevant = events.filter((e) => e.country === baseCurr || e.country === quoteCurr);
+        if (relevant.length > 0) {
+          upcomingEventsStr = relevant
+            .slice(0, 5)
+            .map((e) => `[${e.impact.toUpperCase()}] ${e.country}: ${e.title} (Fcst: ${e.forecast}, Prev: ${e.previous}) at ${e.date}`)
+            .join('; ');
+        }
+      } catch {
+        // ignore
+      }
+
       const contextStr = `
 You are the ApexFX AI Analyst (AI Co-Pilot Strategist) in a professional trading platform.
 Current active instrument: ${safeSymbol}
 Active timeframe: ${safeTimeframe}
 Latest analytical consensus signal: ${activeSignal ? JSON.stringify(activeSignal).slice(0, 2000) : 'None'}
+Upcoming ForexFactory Macro Events for this pair: ${upcomingEventsStr}
 
-Provide professional, accurate, and insightful trading or analysis answers. Use clean markdown formatting. Keep answers concise, highly specific, and focused on technical/fundamental aspects of forex trading. Use the exact symbol's pip and price characteristics in your explanations.
+Provide professional, accurate, and insightful trading or analysis answers. Use clean markdown formatting. Keep answers concise, highly specific, and focused on technical/fundamental aspects of forex trading. Use the exact symbol's pip and price characteristics in your explanations. If high-impact economic news is approaching, advise appropriate volatility risk management.
 
 DISCLAIMER: These are experimental heuristic estimates, not financial advice. Win rates and profit factors shown elsewhere in the platform are heuristic estimates, not backtested results.
 `;

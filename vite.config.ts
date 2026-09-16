@@ -14,7 +14,7 @@ export default defineConfig(() => {
     server: {
       host: '0.0.0.0',
       // Allow any host header in dev so preview/sandbox proxies work
-      allowedHosts: true,
+      allowedHosts: true as const,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.

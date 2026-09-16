@@ -1,6 +1,7 @@
-import React from 'react';
-import { ShieldCheck, Crosshair, TrendingUp, TrendingDown, RefreshCw, BarChart2, Gauge, Activity, PanelRightClose } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { ShieldCheck, Crosshair, TrendingUp, TrendingDown, RefreshCw, BarChart2, Gauge, Activity, PanelRightClose, Layers, CheckCircle2 } from 'lucide-react';
 import { formatPrice, computeSMA, computeEMA, computeRSI } from '../utils/forexData';
+import { calculateConfluenceScore } from '../utils/confluenceEngine';
 import { useTrading } from '../context/TradingContext';
 
 interface SignalPanelProps {
@@ -8,9 +9,21 @@ interface SignalPanelProps {
 }
 
 export const SignalPanel: React.FC<SignalPanelProps> = React.memo(({ onCollapseOverride }) => {
-  const { activeSignal: signal, handleRefreshSignal: onRefresh, isRefreshingSignal: isRefreshing, activeData: data, setRightSidebarOpen } = useTrading();
+  const {
+    activeSignal: signal,
+    handleRefreshSignal: onRefresh,
+    isRefreshingSignal: isRefreshing,
+    activeData: data,
+    activePatterns,
+    indicators,
+    setRightSidebarOpen,
+  } = useTrading();
 
   const onCollapse = onCollapseOverride || (() => setRightSidebarOpen(false));
+
+  const confluence = useMemo(() => {
+    return calculateConfluenceScore(data, activePatterns, indicators);
+  }, [data, activePatterns, indicators]);
 
   if (!signal) {
     return (
@@ -229,6 +242,77 @@ export const SignalPanel: React.FC<SignalPanelProps> = React.memo(({ onCollapseO
         ) : (
           <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-lg p-3 text-center text-xs text-zinc-400 font-mono flex items-center justify-center gap-2"><BarChart2 className="w-4 h-4 text-zinc-500" /><span>Market is consolidating. Wait for technical expansion.</span></div>
         )}
+
+        {/* 4-Layer Multi-Confluence Rating (0–100%) */}
+        <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-3.5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-mono font-bold uppercase tracking-wider text-zinc-300">
+              <Layers className="w-4 h-4 text-emerald-400" />
+              <span>Multi-Confluence Rating</span>
+            </div>
+            <span className={`text-[11px] font-mono font-black uppercase tracking-tight px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 ${confluence.verdictColor}`}>
+              {confluence.verdict}
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between font-mono">
+            <span className="text-xs text-zinc-400">Quantitative Consensus:</span>
+            <span className={`text-lg font-black ${confluence.verdictColor}`}>
+              {confluence.totalScore}%
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full bg-zinc-950 h-2.5 rounded-full overflow-hidden border border-zinc-800 flex">
+            <div
+              className={`h-full transition-all duration-700 ${
+                confluence.totalScore >= 60 ? 'bg-gradient-to-r from-emerald-600 to-emerald-400' :
+                confluence.totalScore <= 40 ? 'bg-gradient-to-r from-rose-600 to-rose-400' :
+                'bg-gradient-to-r from-amber-600 to-amber-400'
+              }`}
+              style={{ width: `${confluence.totalScore}%` }}
+            />
+          </div>
+
+          {/* 4-Layer Point Breakdown */}
+          <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono pt-1">
+            <div className="bg-zinc-950/60 p-1.5 rounded border border-zinc-800/60 flex justify-between">
+              <span className="text-zinc-500">Technical (35):</span>
+              <span className={confluence.technicalScore >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                {confluence.technicalScore > 0 ? `+${confluence.technicalScore}` : confluence.technicalScore}
+              </span>
+            </div>
+            <div className="bg-zinc-950/60 p-1.5 rounded border border-zinc-800/60 flex justify-between">
+              <span className="text-zinc-500">Pattern (25):</span>
+              <span className={confluence.patternScore >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                {confluence.patternScore > 0 ? `+${confluence.patternScore}` : confluence.patternScore}
+              </span>
+            </div>
+            <div className="bg-zinc-950/60 p-1.5 rounded border border-zinc-800/60 flex justify-between">
+              <span className="text-zinc-500">Strength (20):</span>
+              <span className={confluence.strengthScore >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                {confluence.strengthScore > 0 ? `+${confluence.strengthScore}` : confluence.strengthScore}
+              </span>
+            </div>
+            <div className="bg-zinc-950/60 p-1.5 rounded border border-zinc-800/60 flex justify-between">
+              <span className="text-zinc-500">Macro Carry (20):</span>
+              <span className={confluence.macroScore >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                {confluence.macroScore > 0 ? `+${confluence.macroScore}` : confluence.macroScore}
+              </span>
+            </div>
+          </div>
+
+          {confluence.reasons.length > 0 && (
+            <div className="pt-2 border-t border-zinc-800/60 space-y-1">
+              {confluence.reasons.slice(0, 3).map((r, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-[10px] text-zinc-300 font-sans">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
+                  <span>{r}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-3.5 space-y-3" id="sentiment_meter_card">
           <div className="flex items-center justify-between">

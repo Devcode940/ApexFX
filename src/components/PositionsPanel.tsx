@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { TradePosition, TradingSignal } from '../types';
-import { Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, History, Calculator, ChevronDown, ChevronUp, Download } from 'lucide-react';
+import { Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, AlertTriangle, History, Calculator, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { formatPrice } from '../utils/forexData';
+import { playOrderFilledSound } from '../utils/soundAlerts';
 
 import { useTrading } from '../context/TradingContext';
 
@@ -27,6 +28,43 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
   const [customTp, setCustomTp] = useState<string>('');
   const [errorText, setErrorText] = useState<string>('');
   const [pnlHistory, setPnlHistory] = useState<{ time: string; date: string; fullTime: string; pnl: number }[]>([]);
+  const [imminentNews, setImminentNews] = useState<{ title: string; country: string; minutesUntil: number } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function checkNews() {
+      try {
+        const res = await fetch('/api/market/calendar');
+        const json = await res.json();
+        if (!active || !json.success || !Array.isArray(json.data)) return;
+        const now = Date.now();
+        const base = selectedSymbol.slice(0, 3);
+        const quote = selectedSymbol.slice(3, 6);
+        const matching = json.data.filter((e: any) => {
+          if (e.impact !== 'High') return false;
+          return e.country === base || e.country === quote;
+        });
+
+        for (const ev of matching) {
+          const t = new Date(ev.date).getTime();
+          const diffMin = Math.round((t - now) / 60000);
+          if (diffMin >= 0 && diffMin <= 45) {
+            setImminentNews({ title: ev.title, country: ev.country, minutesUntil: diffMin });
+            return;
+          }
+        }
+        setImminentNews(null);
+      } catch {
+        // ignore
+      }
+    }
+    checkNews();
+    const iv = setInterval(checkNews, 60_000);
+    return () => {
+      active = false;
+      clearInterval(iv);
+    };
+  }, [selectedSymbol]);
 
   // --- Closed Trades History Pagination ---
   const [historyPage, setHistoryPage] = useState<number>(1);
@@ -205,6 +243,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
     }
 
     onOpenPosition(type, amount, slValue, tpValue);
+    playOrderFilledSound();
     
     // Clear inputs
     setCustomSl('');
@@ -503,6 +542,15 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
             <div className="flex items-center gap-1.5 text-[11px] text-red-500 bg-red-950/20 px-2.5 py-1.5 rounded border border-red-900/30">
               <AlertCircle className="w-3.5 h-3.5" />
               <span>{errorText}</span>
+            </div>
+          )}
+
+          {imminentNews && (
+            <div className="flex items-start gap-2 text-[10px] text-amber-300 bg-amber-950/40 p-2.5 rounded-lg border border-amber-600/40">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold text-amber-200">Macro Volatility Guard:</span> High-impact <strong>{imminentNews.country} - {imminentNews.title}</strong> is scheduled in <strong>{imminentNews.minutesUntil}m</strong>. Widened spreads and rapid price action likely.
+              </div>
             </div>
           )}
 

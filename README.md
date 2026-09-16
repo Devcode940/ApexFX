@@ -9,11 +9,12 @@ ApexFX Terminal is a high-performance, next-generation **multi-confluence Forex 
 ## 🌟 Core Features
 
 ### 1. Real-Time Data Pipeline
-* **Dual-Streaming Engine**: live WebSocket updates plus a reliable background HTTP polling fallback, so the price feed stays active even behind restrictive firewalls or through connection drops.
-* **Primary source — Twelve Data** (when `TWELVEDATA_API_KEY` is set): the server opens a Twelve Data WebSocket stream (`wss://ws.twelvedata.com/v1/quotes/price`) subscribed to all 8 instruments for low-latency tick prices (WebSocket credits only, not API credits), plus a REST quote sync every 60s for day high/low/change. If the stream drops, it reconnects automatically and REST polling takes over until it is back.
-* **Fallback source — Yahoo Finance**: without a Twelve Data key (or for any symbol Twelve Data fails to cover), the server polls real Yahoo quotes every **5 seconds** (`interval=1m&range=1d`). No random ticks are injected between syncs — every price is fetched from an upstream exchange feed.
-* **Covered instruments**: `EUR/USD`, `GBP/USD`, `USD/JPY`, `AUD/USD`, `USD/CAD`, `GBP/JPY`, plus precious metals `XAU/USD` (Gold) and `XAG/USD` (Silver). Silver is served from COMEX silver futures (`SI=F`) because Twelve Data free plans omit `XAG/USD` and Yahoo has no silver spot feed.
-* **Secondary rate sync**: on load the watchlist is pre-populated from the configured ForexRate API (falling back to the public Frankfurter/ECB API at `/api/forex`) until the WebSocket feed takes over.
+* **Multi-Provider Dual-Streaming Engine**: live WebSocket updates plus a reliable background HTTP polling fallback, so the price feed stays active even behind restrictive firewalls or through connection drops.
+* **Zero-Auth Primary Backbone — Deriv Public Stream**: connects out of the box to Deriv's public market feed (`wss://ws.derivws.com/websockets/v3?app_id=1089`) without requiring any API key. Streams live ticks for all 8 instruments including Gold (`XAU/USD`) and Silver (`XAG/USD`) with sub-second latency.
+* **Tiingo FX Feed (Optional, Recommended)**: when `TIINGO_API_KEY` is configured, streams Top-of-Book quotes and fetches institutional tier-1 historical candlestick bars (`1min` through `1day` back to 2020) via REST or WebSocket firehose (`wss://api.tiingo.com/fx`).
+* **Twelve Data (Optional)**: when `TWELVEDATA_API_KEY` is set, provides Twelve Data quote sync and streaming.
+* **Covered instruments**: `EUR/USD`, `GBP/USD`, `USD/JPY`, `AUD/USD`, `USD/CAD`, `GBP/JPY`, plus precious metals `XAU/USD` (Gold) and `XAG/USD` (Silver).
+* **Secondary rate sync & Macro Endpoints**: provides ForexFactory economic calendar (`/api/market/calendar`) and live multi-currency strength matrix (`/api/market/strength`).
 
 ### 2. High-Precision Charting & Confluence Overlays
 * **Real historical candlesticks**: live price history from Yahoo Finance for `1m`, `5m`, `15m`, `1H`, `4H` (aggregated from hourly data server-side), and `D`.

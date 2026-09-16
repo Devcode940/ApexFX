@@ -24,8 +24,8 @@ import { useChartHistory } from '../hooks/useChartHistory';
 import { usePaperTrading } from '../hooks/usePaperTrading';
 
 interface TradingContextType {
-  mobileTab: 'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis';
-  setMobileTab: React.Dispatch<React.SetStateAction<'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis'>>;
+  mobileTab: 'chart' | 'watchlist' | 'signals' | 'macro' | 'trader' | 'performance' | 'analysis';
+  setMobileTab: React.Dispatch<React.SetStateAction<'chart' | 'watchlist' | 'signals' | 'macro' | 'trader' | 'performance' | 'analysis'>>;
   leftSidebarOpen: boolean;
   setLeftSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
   rightSidebarOpen: boolean;
@@ -77,7 +77,7 @@ interface TradingContextType {
 const TradingContext = createContext<TradingContextType | undefined>(undefined);
 
 export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [mobileTab, setMobileTab] = useState<'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis'>('chart');
+  const [mobileTab, setMobileTab] = useState<'chart' | 'watchlist' | 'signals' | 'macro' | 'trader' | 'performance' | 'analysis'>('chart');
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [isPending, startTransition] = useTransition();

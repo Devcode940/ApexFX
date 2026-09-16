@@ -32,7 +32,9 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
 
   // Security headers (helmet-like)
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('X-Frame-Options', 'DENY');
+  }
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
@@ -47,10 +49,10 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ws: wss: https:; frame-ancestors 'none'; object-src 'none'; base-uri 'self';"
     );
   } else {
-    // Dev: Vite HMR uses inline scripts + eval source maps
+    // Dev: Vite HMR uses inline scripts + eval source maps. Allow framing in sandbox/preview environments.
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ws: wss: http: https:; frame-ancestors 'none';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ws: wss: http: https:; frame-ancestors *;"
     );
   }
 

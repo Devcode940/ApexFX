@@ -12,6 +12,8 @@ import {
   Calculator,
   Compass,
   RotateCcw,
+  Sun,
+  Calendar,
 } from 'lucide-react';
 
 import { useTrading } from '../context/TradingContext';
@@ -23,7 +25,7 @@ interface ChatMessage {
   image?: string;
 }
 
-type TemplateCategory = 'analysis' | 'trends' | 'risk';
+type TemplateCategory = 'analysis' | 'macro' | 'trends' | 'risk';
 
 export const AiAssistant: React.FC = () => {
   const {
@@ -231,12 +233,25 @@ export const AiAssistant: React.FC = () => {
           </div>
           <div className="flex bg-zinc-950 p-0.5 rounded border border-zinc-800 font-mono text-[9px]">
             <button onClick={() => setActiveCategory('analysis')} className={`px-1.5 py-0.5 rounded cursor-pointer ${activeCategory === 'analysis' ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-500'}`}>Analysis</button>
+            <button onClick={() => setActiveCategory('macro')} className={`px-1.5 py-0.5 rounded cursor-pointer ${activeCategory === 'macro' ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-500'}`}>Macro</button>
             <button onClick={() => setActiveCategory('trends')} className={`px-1.5 py-0.5 rounded cursor-pointer ${activeCategory === 'trends' ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-500'}`}>Indicators</button>
             <button onClick={() => setActiveCategory('risk')} className={`px-1.5 py-0.5 rounded cursor-pointer ${activeCategory === 'risk' ? 'bg-zinc-800 text-zinc-100 font-bold' : 'text-zinc-500'}`}>Risk</button>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-1.5 max-h-[105px] overflow-y-auto scrollbar-thin">
+          {activeCategory === 'macro' && (
+            <>
+              <button disabled={isTyping} onClick={() => handleSendMessage("Generate a complete Daily Macro Morning Briefing: evaluate today's ForexFactory economic releases, 8-currency strength hierarchy, and highest-confluence pairs for today.")} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group disabled:opacity-50 disabled:cursor-not-allowed">
+                <div className="flex items-center gap-1.5 mb-1"><Sun className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">Daily Morning Brief</span></div>
+                <p className="text-[9px] text-zinc-500 leading-tight">ForexFactory releases + Currency Strength ranking.</p>
+              </button>
+              <button disabled={isTyping} onClick={() => handleSendMessage('Check upcoming high-impact economic news releases for this active instrument and provide a defensive risk-management playbook.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+                <div className="flex items-center gap-1.5 mb-1"><Calendar className="w-3.5 h-3.5 text-rose-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">Pre-News Playbook</span></div>
+                <p className="text-[9px] text-zinc-500 leading-tight">Volatility risk and spread mitigation plan.</p>
+              </button>
+            </>
+          )}
           {activeCategory === 'analysis' && (
             <>
               <button disabled={isTyping} onClick={() => handleSendMessage('Run a multi-indicator confluence check to find matching confirmation signals. Note that win rates are heuristic estimates.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group disabled:opacity-50 disabled:cursor-not-allowed">

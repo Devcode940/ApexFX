@@ -10,6 +10,9 @@ import { PatternPanel } from './components/PatternPanel';
 import { NewsPanel } from './components/NewsPanel';
 import { AiAssistant } from './components/AiAssistant';
 import { SupabaseSync } from './components/SupabaseSync';
+import { EconomicCalendar } from './components/EconomicCalendar';
+import { CurrencyStrengthMeter } from './components/CurrencyStrengthMeter';
+import { MacroSentimentGauge } from './components/MacroSentimentGauge';
 import { formatPrice, PAIRS_CONFIG } from './utils/forexData';
 
 import appLogo from './assets/images/app_logo_1782444134483.jpg';
@@ -212,7 +215,7 @@ function TradingTerminal() {
               <>
                 <div className="h-4 w-px bg-zinc-800" />
                 <div className="text-right">
-                  <span className="text-[9px] text-zinc-500 uppercase block leading-none">Twelve Data</span>
+                  <span className="text-[9px] text-zinc-500 uppercase block leading-none">Live Feed</span>
                   <span className={`text-xs font-bold ${(!isNaN(parseFloat(liveQuote.change)) && parseFloat(liveQuote.change) >= 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {!isNaN(parseFloat(liveQuote.price)) ? parseFloat(liveQuote.price).toFixed(PAIRS_CONFIG[selectedSymbol]?.pipDecimal + 1 || 5) : '—'}
                   </span>
@@ -315,8 +318,8 @@ function TradingTerminal() {
 
           {/* Mobile responsive tab buttons */}
           {/* Mobile Navigation Tabs */}
-          <div className="md:hidden grid grid-cols-6 gap-1 bg-zinc-900 p-1 border border-zinc-800 rounded-xl relative z-10 select-none">
-            {(['chart', 'watchlist', 'signals', 'trader', 'performance', 'analysis'] as const).map((tab) => (
+          <div className="md:hidden grid grid-cols-7 gap-1 bg-zinc-900 p-1 border border-zinc-800 rounded-xl relative z-10 select-none">
+            {(['chart', 'watchlist', 'signals', 'macro', 'trader', 'performance', 'analysis'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setMobileTab(tab)}
@@ -329,6 +332,15 @@ function TradingTerminal() {
                 {tab}
               </button>
             ))}
+          </div>
+
+          {/* Institutional Macro, Currency Strength & ForexFactory Economic Calendar Deck */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <EconomicCalendar selectedSymbol={selectedSymbol} />
+            <div className="flex flex-col gap-4">
+              <CurrencyStrengthMeter />
+              <MacroSentimentGauge selectedSymbol={selectedSymbol} />
+            </div>
           </div>
 
           {/* Bottom Grid for Secondary Panels (Visible side-by-side on desktop screen dimensions) */}
@@ -382,6 +394,14 @@ function TradingTerminal() {
 
           {mobileTab === 'signals' && (
             <SignalPanel />
+          )}
+
+          {mobileTab === 'macro' && (
+            <div className="space-y-4">
+              <EconomicCalendar selectedSymbol={selectedSymbol} />
+              <CurrencyStrengthMeter />
+              <MacroSentimentGauge selectedSymbol={selectedSymbol} />
+            </div>
           )}
 
           {mobileTab === 'trader' && (
