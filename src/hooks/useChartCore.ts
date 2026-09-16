@@ -220,7 +220,7 @@ export function useChartCore(params: UseChartCoreParams): void {
       macdChartRef.current = null;
     }
 
-    const chart = createMainChart(container, chartHeight, theme);
+    const chart = createMainChart(container, chartHeight, theme, symbol, timeframe, magnetMode);
     chartRef.current = chart;
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
