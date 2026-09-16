@@ -26,6 +26,8 @@ import { usePaperTrading } from '../hooks/usePaperTrading';
 interface TradingContextType {
   mobileTab: 'chart' | 'watchlist' | 'signals' | 'macro' | 'trader' | 'performance' | 'analysis';
   setMobileTab: React.Dispatch<React.SetStateAction<'chart' | 'watchlist' | 'signals' | 'macro' | 'trader' | 'performance' | 'analysis'>>;
+  isChartFullScreen: boolean;
+  setIsChartFullScreen: React.Dispatch<React.SetStateAction<boolean>>;
   leftSidebarOpen: boolean;
   setLeftSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
   rightSidebarOpen: boolean;
@@ -78,6 +80,7 @@ const TradingContext = createContext<TradingContextType | undefined>(undefined);
 
 export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mobileTab, setMobileTab] = useState<'chart' | 'watchlist' | 'signals' | 'macro' | 'trader' | 'performance' | 'analysis'>('chart');
+  const [isChartFullScreen, setIsChartFullScreen] = useState(false);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [isPending, startTransition] = useTransition();
@@ -241,6 +244,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
       value={{
         mobileTab,
         setMobileTab,
+        isChartFullScreen,
+        setIsChartFullScreen,
         leftSidebarOpen,
         setLeftSidebarOpen,
         rightSidebarOpen,

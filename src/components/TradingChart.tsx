@@ -41,7 +41,15 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   timeframe,
   patterns,
   indicators }) => {
-  const { theme: globalTheme, positions, closedTrades, handleChartSnapshot, handleToggleIndicator } = useTrading();
+  const {
+    theme: globalTheme,
+    positions,
+    closedTrades,
+    handleChartSnapshot,
+    handleToggleIndicator,
+    isChartFullScreen,
+    setIsChartFullScreen,
+  } = useTrading();
   const theme: ChartTheme = globalTheme === 'light' ? 'light' : 'dark';
 
   // --- Price Streak (consecutive candles) ---
@@ -123,11 +131,90 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   const [isRsiMinimized, setIsRsiMinimized] = useState(false);
   const [isMacdMinimized, setIsMacdMinimized] = useState(false);
   const [preferredHeight, setPreferredHeight] = useState(460);
-  const [isExpandedFullScreen, setIsExpandedFullScreen] = useState(false);
 
-  const chartHeight = isExpandedFullScreen
-    ? Math.max(window.innerHeight - 170, 400)
-    : preferredHeight;
+  // Dynamic window dimensions for portrait & landscape orientation handling
+  const [viewportDims, setViewportDims] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1200,
+    height: typeof window !== 'undefined' ? window.innerHeight : 800,
+  }));
+
+  useEffect(() => {
+    const onResize = () => {
+      setViewportDims({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+      setTimeout(() => {
+        setViewportDims({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
+      }, 150);
+    };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+
+  const isCompactHeight = viewportDims.height < 550;
+  const subChartHeight = isChartFullScreen && isCompactHeight ? 75 : (isChartFullScreen ? 110 : 100);
+
+  const subChartsHeight = useMemo(() => {
+    let h = 0;
+    const itemHeight = subChartHeight + 28;
+    if (indicators.rsi && !isRsiMinimized) h += itemHeight;
+    if (indicators.macd && !isMacdMinimized) h += itemHeight;
+    return h;
+  }, [indicators.rsi, indicators.macd, isRsiMinimized, isMacdMinimized, subChartHeight]);
+
+  const chartHeight = useMemo(() => {
+    if (!isChartFullScreen) return preferredHeight;
+    // In full-screen mode, focus 100% on chart UI adapting to portrait and landscape heights
+    const headerOverhead = isCompactHeight ? 48 : 56;
+    const padding = 16;
+    const overhead = headerOverhead + padding;
+    return Math.max(viewportDims.height - overhead - subChartsHeight, isCompactHeight ? 180 : 260);
+  }, [isChartFullScreen, preferredHeight, viewportDims.height, subChartsHeight, isCompactHeight]);
+
+  const handleToggleFullScreen = useCallback(() => {
+    setIsChartFullScreen((prev) => {
+      const next = !prev;
+      if (next) {
+        if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+      } else {
+        if (document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+      return next;
+    });
+  }, [setIsChartFullScreen]);
+
+  // Press ESC to exit Fullscreen focus
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isChartFullScreen) {
+        setIsChartFullScreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isChartFullScreen, setIsChartFullScreen]);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      if (!document.fullscreenElement && isChartFullScreen) {
+        setIsChartFullScreen(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, [isChartFullScreen, setIsChartFullScreen]);
 
   // --- Derived memos ---
   const activeFeaturesCount = useMemo(() => {
@@ -198,7 +285,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
     indicators,
     theme,
     chartHeight,
-    isExpandedFullScreen,
+    subChartHeight,
+    isExpandedFullScreen: isChartFullScreen,
     isRsiMinimized,
     isMacdMinimized,
     drawings,
@@ -300,7 +388,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   );
 
   return (
-    <div className={`flex flex-col gap-2 ${isExpandedFullScreen ? 'h-[calc(100vh-4rem)]' : ''}`}>
+    <div className={`flex flex-col gap-2 ${isChartFullScreen ? 'h-full w-full' : ''}`}>
       <ChartHeader
         symbol={symbol}
         timeframe={timeframe}
@@ -308,7 +396,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
         theme={theme}
         activeTool={activeTool}
         preferredHeight={preferredHeight}
-        isExpandedFullScreen={isExpandedFullScreen}
+        isExpandedFullScreen={isChartFullScreen}
         showChartSidebar={showChartSidebar}
         activeFeaturesCount={activeFeaturesCount}
         onSelectTimeframe={(tf) => {
@@ -318,10 +406,10 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
         onSetChartHeight={handleSetChartHeight}
         onToggleSidebar={() => setShowChartSidebar((v) => !v)}
         onSnapshot={handleTakeSnapshot}
-        onToggleFullScreen={() => setIsExpandedFullScreen((v) => !v)}
+        onToggleFullScreen={handleToggleFullScreen}
       />
 
-      <div className="flex gap-2">
+      <div className={`flex gap-2 ${isChartFullScreen ? 'flex-1 min-h-0' : ''}`}>
         {/* Drawing Toolbar */}
         <DrawingToolbar
           theme={theme}
@@ -344,7 +432,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
         />
 
         {/* Main Chart Column */}
-        <div className="flex-1 flex flex-col gap-2 min-w-0">
+        <div className={`flex-1 flex flex-col gap-2 min-w-0 ${isChartFullScreen ? 'h-full' : ''}`}>
           <div className={`relative ${theme === 'dark' ? 'bg-zinc-900 border-zinc-800/70' : 'bg-white border-zinc-200'} border rounded-lg overflow-hidden shadow-md`}>
             <div ref={containerRef} style={{ height: chartHeight }} className="w-full" />
 
@@ -385,8 +473,9 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
             setIsMacdMinimized={setIsMacdMinimized}
             rsiContainerRef={rsiContainerRef}
             macdContainerRef={macdContainerRef}
-            isExpandedFullScreen={isExpandedFullScreen}
+            isExpandedFullScreen={isChartFullScreen}
             hudData={hudData}
+            subChartHeight={subChartHeight}
           />
         </div>
 
@@ -451,8 +540,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
               setSelectedTimeframe={(tf) => {
                 window.dispatchEvent(new CustomEvent('apexfx:timeframe', { detail: { timeframe: tf } }));
               }}
-              isExpandedFullScreen={isExpandedFullScreen}
-              setIsExpandedFullScreen={setIsExpandedFullScreen}
+              isExpandedFullScreen={isChartFullScreen}
+              setIsExpandedFullScreen={setIsChartFullScreen}
               onFitContent={handleFitContent}
               onSnapshot={handleTakeSnapshot}
             />

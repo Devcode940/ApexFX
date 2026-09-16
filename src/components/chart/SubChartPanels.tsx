@@ -17,6 +17,7 @@ interface SubChartPanelsProps {
   macdContainerRef: React.RefObject<HTMLDivElement | null>;
   isExpandedFullScreen: boolean;
   hudData: HudData | null;
+  subChartHeight?: number;
 }
 
 const panelHeaderClass = (theme: ChartTheme) =>
@@ -37,9 +38,11 @@ export const SubChartPanels: React.FC<SubChartPanelsProps> = ({
   macdContainerRef,
   isExpandedFullScreen,
   hudData,
+  subChartHeight,
 }) => {
   const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
   const precision = config.pipDecimal + 1;
+  const height = subChartHeight ?? (isExpandedFullScreen ? 110 : 100);
 
   return (
     <>
@@ -58,7 +61,7 @@ export const SubChartPanels: React.FC<SubChartPanelsProps> = ({
             </div>
           </div>
           {!isRsiMinimized && (
-            <div ref={rsiContainerRef} style={{ height: isExpandedFullScreen ? 110 : 100 }} className="w-full" />
+            <div ref={rsiContainerRef} style={{ height }} className="w-full" />
           )}
         </div>
       )}
@@ -78,7 +81,7 @@ export const SubChartPanels: React.FC<SubChartPanelsProps> = ({
             </div>
           </div>
           {!isMacdMinimized && (
-            <div ref={macdContainerRef} style={{ height: isExpandedFullScreen ? 110 : 100 }} className="w-full" />
+            <div ref={macdContainerRef} style={{ height }} className="w-full" />
           )}
         </div>
       )}

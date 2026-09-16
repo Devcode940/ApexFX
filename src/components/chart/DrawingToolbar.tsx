@@ -151,11 +151,11 @@ export const DrawingToolbar: React.FC<DrawingToolbarProps> = ({
   return (
     <div
       ref={toolbarRef}
-      className={`relative flex flex-col gap-1.5 p-1.5 ${
+      className={`relative flex flex-col gap-1 p-1 sm:gap-1.5 sm:p-1.5 ${
         theme === 'dark'
           ? 'bg-zinc-900 border-zinc-800/80 text-zinc-100 shadow-xl'
           : 'bg-white border-zinc-200 text-zinc-900 shadow-lg'
-      } border rounded-lg w-11 shrink-0 items-center justify-start py-3 select-none z-30`}
+      } border rounded-lg w-10 sm:w-11 shrink-0 items-center justify-start py-2 sm:py-3 select-none z-30 overflow-y-auto max-h-full scrollbar-none`}
     >
       {/* 1. CURSORS GROUP */}
       <div className="relative group">

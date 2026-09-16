@@ -57,6 +57,7 @@ export interface UseChartCoreParams {
   indicators: TechnicalIndicatorsState;
   theme: ChartTheme;
   chartHeight: number;
+  subChartHeight?: number;
   isExpandedFullScreen: boolean;
   isRsiMinimized: boolean;
   isMacdMinimized: boolean;
@@ -109,6 +110,7 @@ export function useChartCore(params: UseChartCoreParams): void {
     indicators,
     theme,
     chartHeight,
+    subChartHeight,
     isExpandedFullScreen,
     isRsiMinimized,
     isMacdMinimized,
@@ -265,15 +267,17 @@ export function useChartCore(params: UseChartCoreParams): void {
       })
     );
 
+    const effectiveSubHeight = subChartHeight ?? (isExpandedFullScreen ? 110 : 100);
+
     let rsiChart: IChartApi | null = null;
     if (indicators.rsi && !isRsiMinimized) {
-      rsiChart = createRsiSubChart(rsiContainerRef.current, data, theme, isExpandedFullScreen ? 110 : 100);
+      rsiChart = createRsiSubChart(rsiContainerRef.current, data, theme, effectiveSubHeight);
       rsiChartRef.current = rsiChart;
     }
 
     let macdChart: IChartApi | null = null;
     if (indicators.macd && !isMacdMinimized) {
-      const macdResult = createMacdSubChart(macdContainerRef.current, data, theme, isExpandedFullScreen ? 110 : 100);
+      const macdResult = createMacdSubChart(macdContainerRef.current, data, theme, effectiveSubHeight);
       if (macdResult) {
         macdChart = macdResult.chart;
         macdChartRef.current = macdChart;
@@ -298,10 +302,10 @@ export function useChartCore(params: UseChartCoreParams): void {
       const { width } = entries[0].contentRect;
       chart.resize(width, chartHeight);
       if (rsiChartRef.current && rsiContainerRef.current) {
-        rsiChartRef.current.resize(width, isExpandedFullScreen ? 110 : 100);
+        rsiChartRef.current.resize(width, effectiveSubHeight);
       }
       if (macdChartRef.current && macdContainerRef.current) {
-        macdChartRef.current.resize(width, isExpandedFullScreen ? 110 : 100);
+        macdChartRef.current.resize(width, effectiveSubHeight);
       }
     });
     resizeObserver.observe(container);
@@ -929,7 +933,7 @@ export function useChartCore(params: UseChartCoreParams): void {
       chartRefs.current.candleSeries = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, theme, chartHeight, isExpandedFullScreen, isRsiMinimized, isMacdMinimized, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, data.length]);
+  }, [symbol, timeframe, theme, chartHeight, isExpandedFullScreen, isRsiMinimized, isMacdMinimized, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, data.length, effectiveSubHeight]);
 
   // Incremental update: use update() for same-length (live-tick) changes and setData() only
   // when a new bar has appeared. This avoids a full dataset repaint on every tick.

@@ -488,15 +488,27 @@ export const ChartHeader: React.FC<ChartHeaderProps> = ({
           <span>Snapshot for AI</span>
         </button>
 
+        {/* Focus Mode indicator pill */}
+        {isExpandedFullScreen && (
+          <span className="hidden md:inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-300 border border-emerald-700/60">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+            Fullscreen Focus Mode
+          </span>
+        )}
+
         <button
           onClick={onToggleFullScreen}
-          className={`p-1.5 ${theme === 'dark' ? 'hover:bg-zinc-800 text-zinc-400 hover:text-white border-zinc-800 hover:border-zinc-700' : 'hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 border-zinc-200 hover:border-zinc-300'} rounded border transition-colors cursor-pointer flex items-center gap-1 text-xs font-mono font-bold`}
-          title={isExpandedFullScreen ? "Exit Fullscreen Screen" : "Maximize Full Chart Screen"}
+          className={`p-1.5 rounded border transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-mono font-bold ${
+            isExpandedFullScreen
+              ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-950/40'
+              : (theme === 'dark' ? 'hover:bg-zinc-800 text-zinc-400 hover:text-white border-zinc-800 hover:border-zinc-700' : 'hover:bg-zinc-100 text-zinc-600 hover:text-zinc-900 border-zinc-200 hover:border-zinc-300')
+          }`}
+          title={isExpandedFullScreen ? "Exit Fullscreen Focus (ESC)" : "Maximize Full Chart Screen"}
         >
           {isExpandedFullScreen ? (
             <>
               <Minimize2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Normal Mode</span>
+              <span className="inline">Exit Fullscreen</span>
             </>
           ) : (
             <>
