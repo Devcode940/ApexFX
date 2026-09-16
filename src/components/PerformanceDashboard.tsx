@@ -1,16 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { useTrading } from '../context/TradingContext';
-import { ClosedTrade, TradePosition } from '../types';
+import { TradePosition } from '../types';
 import {
   Trophy,
-  TrendingUp,
-  TrendingDown,
   Clock,
   DollarSign,
   PieChart,
   BarChart2,
   Activity,
-  Zap,
   Filter,
   CheckCircle2,
   XCircle,

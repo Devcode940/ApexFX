@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { TradePosition, TradingSignal, ClosedTrade } from '../types';
-import { DollarSign, Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, History, Calculator, ChevronDown, ChevronUp, Download, FileSpreadsheet } from 'lucide-react';
+import { TradePosition, TradingSignal } from '../types';
+import { Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, History, Calculator, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { formatPrice } from '../utils/forexData';
 
 import { useTrading } from '../context/TradingContext';
 
-import { PerformanceDashboard, formatDuration } from './PerformanceDashboard';
+import { PerformanceDashboard } from './PerformanceDashboard';
 
 interface PositionsPanelProps {}
 
@@ -19,8 +19,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
     currentPrice,
     activeSignal,
     handleOpenPosition: onOpenPosition,
-    handleClosePosition: onClosePosition,
-  } = useTrading();
+    handleClosePosition: onClosePosition } = useTrading();
   const [activeTab, setActiveTab] = useState<'positions' | 'history' | 'analytics'>('positions');
   const [amount, setAmount] = useState<number>(0.1); // lot size
   const [useSltp, setUseSltp] = useState<boolean>(true);
@@ -75,18 +74,42 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
     localStorage.setItem('forexinsight_calc_manual_sl_pips', manualSlPips.toString());
   }, [manualSlPips]);
 
-  const getPipMultiplier = (symbol: string) => {
-    if (symbol.includes('JPY')) return 100;
-    if (symbol.includes('XAG')) return 10000;
-    if (symbol.includes('XAU')) return 100;
-    return 10000;
+  const getPipSize = (symbol: string): number => {
+    // Pip sizes: forex (non-JPY) = 0.0001, JPY crosses = 0.01, gold = $0.10? Use 0.01 (1 cent) as 1 pip for metals per our PAIRS_CONFIG (pipDecimal+1 means display precision).
+    // The actual industry "pip" for XAU is $0.10 but the UI uses 2-decimal display (0.01 = "pipette"). Stick to 0.01 = 1 pip for gold, 0.0001 for silver, matching PAIRS_CONFIG.
+    if (symbol.includes('JPY')) return 0.01;
+    if (symbol.includes('XAU')) return 0.01;
+    if (symbol.includes('XAG')) return 0.0001;
+    return 0.0001;
   };
 
-  const getPipValueStandardLot = (symbol: string) => {
-    if (symbol.includes('XAU')) return 1.0;
-    if (symbol.includes('XAG')) return 5.0;
-    if (symbol.includes('JPY')) return 6.5;
-    return 10.0;
+  const getPipMultiplier = (symbol: string): number => {
+    return 1 / getPipSize(symbol);
+  };
+
+  /**
+   * USD value of one pip for one standard lot, in USD terms.
+   * For XXX/USD pairs: pipValue = pipSize * contractSize (e.g., 0.0001 * 100,000 = $10).
+   * For USD/XXX pairs (including JPY): pipValue = (pipSize / currentPrice) * contractSize.
+   * For cross pairs like GBP/JPY: approximate by routing through USD using available USD/JPY.
+   */
+  const getPipValueStandardLot = (symbol: string, price: number): number => {
+    const pip = getPipSize(symbol);
+    const contractSize = symbol === 'XAUUSD' ? 100 : symbol === 'XAGUSD' ? 5000 : 100000;
+
+    // Quote currency is USD (EUR/USD, GBP/USD, AUD/USD, XAU/USD, XAG/USD)
+    if (symbol.endsWith('USD')) {
+      return pip * contractSize;
+    }
+    // USD is base currency (USD/JPY, USD/CAD, USD/CHF)
+    if (symbol.startsWith('USD')) {
+      if (price > 0) return (pip / price) * contractSize;
+      return symbol.includes('JPY') ? 6.7 : 10;
+    }
+    // Cross pairs: e.g., GBP/JPY, EUR/JPY, GBP/AUD
+    // Approximation: find USD quote and multiply. Fall back to JPY default.
+    if (price > 0) return (pip / price) * contractSize;
+    return 6.7;
   };
 
   const getActiveSlPips = () => {
@@ -107,8 +130,10 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
 
   const activeSlInfo = getActiveSlPips();
   const riskAmount = (balance * riskPercent) / 100;
-  const pipValue = getPipValueStandardLot(selectedSymbol);
-  const suggestedLotSizeRaw = activeSlInfo.pips > 0 ? (riskAmount / (activeSlInfo.pips * pipValue)) : 0.1;
+  const pipValue = currentPrice > 0
+    ? getPipValueStandardLot(selectedSymbol, currentPrice)
+    : 10;
+  const suggestedLotSizeRaw = activeSlInfo.pips > 0 && pipValue > 0 ? (riskAmount / (activeSlInfo.pips * pipValue)) : 0.1;
   const suggestedLotSize = parseFloat(Math.max(0.01, Math.min(100.0, suggestedLotSizeRaw)).toFixed(2));
 
   useEffect(() => {
@@ -137,7 +162,6 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
   }, [positions]);
 
   const isJPY = selectedSymbol.includes('JPY');
-  const pipDecimal = isJPY ? 2 : 4;
 
   const handleOpenMarketOrder = (type: 'BUY' | 'SELL') => {
     setErrorText('');
@@ -195,7 +219,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
     setErrorText('');
   };
 
-  // --- Export Closed Trades History to CSV ---
+  // --- Export Closed Trades History to CSV (RFC 4180) ---
   const handleExportCSV = () => {
     if (closedTrades.length === 0) return;
 
@@ -208,8 +232,14 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
       'Exit Price',
       'Realized PnL ($)',
       'Close Reason',
-      'Execution Time'
+      'Execution Time',
     ];
+
+    const csvEscape = (v: unknown): string => {
+      const s = String(v ?? '');
+      if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
 
     const rows = closedTrades.map((trade) => [
       trade.id,
@@ -220,13 +250,13 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
       formatPrice(trade.exitPrice, trade.symbol),
       trade.pnl.toFixed(2),
       trade.closeReason || 'Manual',
-      `"${trade.time}"`
+      trade.time,
     ]);
 
     const csvContent = [
-      headers.join(','),
-      ...rows.map((row) => row.join(','))
-    ].join('\n');
+      headers.map(csvEscape).join(','),
+      ...rows.map((row) => row.map(csvEscape).join(',')),
+    ].join('\r\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);

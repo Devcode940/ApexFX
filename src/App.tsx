@@ -12,7 +12,7 @@ import { AiAssistant } from './components/AiAssistant';
 import { SupabaseSync } from './components/SupabaseSync';
 import { formatPrice, PAIRS_CONFIG } from './utils/forexData';
 
-const appLogo = '/src/assets/images/app_logo_1782444134483.jpg';
+import appLogo from './assets/images/app_logo_1782444134483.jpg';
 import { 
   Activity, 
   Clock, 
@@ -41,7 +41,6 @@ function TradingTerminal() {
     isPending,
     startTransition,
     selectedSymbol,
-    setSelectedSymbol,
     selectedTimeframe,
     setSelectedTimeframe,
     indicators,

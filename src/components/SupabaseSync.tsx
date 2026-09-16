@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
-import { Database, Cloud, CloudOff, RefreshCw, Lock, User, Check, AlertCircle, ExternalLink, ShieldCheck, Terminal } from 'lucide-react';
+import { Database, Cloud, CloudOff, RefreshCw, Lock, User, Check, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
 import { TradePosition, ClosedTrade } from '../types';
 
 import { useTrading } from '../context/TradingContext';
@@ -12,8 +12,7 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
     positions,
     closedTrades,
     setPositions,
-    setClosedTrades,
-  } = useTrading();
+    setClosedTrades } = useTrading();
 
   const onImportSync = (syncedPositions: TradePosition[], syncedTrades: ClosedTrade[]) => {
     setPositions(syncedPositions);

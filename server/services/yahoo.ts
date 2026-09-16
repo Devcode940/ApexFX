@@ -1,5 +1,5 @@
 import { fetchWithTimeout } from '../lib/fetch';
-import { error, warn } from '../lib/logger';
+import { warn } from '../lib/logger';
 import { TD_SYMBOLS } from './market';
 import { historyCache } from '../lib/cache';
 
@@ -56,7 +56,7 @@ export async function fetchTwelveDataHistory(symbol: string, timeframe: string) 
 }
 
 export async function fetchYahooHistory(symbol: string, timeframe: string) {
-  const cacheKey = `yahoo:${symbol}:${timeframe}`;
+  const cacheKey = `history:${symbol}:${timeframe}`;
   const cached = historyCache.get(cacheKey);
   if (cached) return cached;
 
@@ -189,7 +189,7 @@ export async function fetchYahooHistory(symbol: string, timeframe: string) {
         data: candlesticks,
       };
 
-      historyCache.set(cacheKey, resultObj, 60_000); // 60s cache
+      historyCache.set(cacheKey, resultObj, 60_000);
       return resultObj;
     } catch (e) {
       lastError = e;

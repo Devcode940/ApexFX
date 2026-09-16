@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Pattern } from '../types';
-import { Sparkles, Eye, TrendingUp, TrendingDown, RefreshCw, Award, ShieldCheck, HelpCircle } from 'lucide-react';
+import { Sparkles, Eye, RefreshCw, Award, ShieldCheck } from 'lucide-react';
 
 import { useTrading } from '../context/TradingContext';
 
@@ -10,8 +10,7 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
   const {
     activePatterns: patterns,
     highlightedPattern,
-    setHighlightedPattern: onHighlightPattern,
-  } = useTrading();
+    setHighlightedPattern: onHighlightPattern } = useTrading();
   const [filterType, setFilterType] = useState<'all' | 'profitable'>('all');
   const [sortBy, setSortBy] = useState<'chronological' | 'profitability'>('profitability');
 

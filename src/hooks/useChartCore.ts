@@ -517,15 +517,29 @@ export function useChartCore(params: UseChartCoreParams): void {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, theme, chartHeight, isExpandedFullScreen, isRsiMinimized, isMacdMinimized, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, data.length]);
 
-  // Update candle data without full recreation
+  // Incremental update: use update() for same-length (live-tick) changes and setData() only
+  // when a new bar has appeared. This avoids a full dataset repaint on every tick.
+  const prevDataLenRef = useRef<number>(0);
   useEffect(() => {
     const cs = chartRefs.current.candleSeries;
     if (!cs || data.length === 0) return;
-    // Only update if data length changed significantly or last close changed
     try {
-      cs.setData(toCandlestickData(data));
+      if (prevDataLenRef.current === data.length) {
+        // Same bar: update in place
+        const last = data[data.length - 1];
+        cs.update({
+          time: last.time as UTCTimestamp,
+          open: last.open,
+          high: last.high,
+          low: last.low,
+          close: last.close,
+        });
+      } else {
+        cs.setData(toCandlestickData(data));
+        prevDataLenRef.current = data.length;
+      }
     } catch {
-      // If setData fails (e.g., series removed), ignore
+      // If update/setData fails (e.g., series removed), ignore
     }
   }, [data]);
 

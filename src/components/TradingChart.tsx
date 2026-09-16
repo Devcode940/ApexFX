@@ -4,10 +4,8 @@ import { AnimatePresence } from 'motion/react';
 import type { Candlestick, Pattern, TechnicalIndicatorsState, Timeframe } from '../types';
 import { useTrading } from '../context/TradingContext';
 import {
-  FOREX_SESSIONS,
   ForexSessionKey,
-  generateSessionBlocks,
-} from '../utils/forexSessions';
+  generateSessionBlocks } from '../utils/forexSessions';
 import type {
   AnimTradeFilter,
   AnimatedTrade,
@@ -17,8 +15,7 @@ import type {
   DrawingTool,
   HudData,
   PatternMarkerFilter,
-  SidebarTab,
-} from '../types/chart';
+  SidebarTab } from '../types/chart';
 import { EMPTY_DRAWINGS } from '../types/chart';
 import { useChartCore } from '../hooks/useChartCore';
 import { loadDrawings, saveDrawings } from '../utils/chart/drawingTools';
@@ -42,8 +39,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   symbol,
   timeframe,
   patterns,
-  indicators,
-}) => {
+  indicators }) => {
   const { theme: globalTheme, positions, closedTrades, handleChartSnapshot, handleToggleIndicator } = useTrading();
   const theme: ChartTheme = globalTheme === 'light' ? 'light' : 'dark';
 
@@ -104,8 +100,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
           tokyo: typeof parsed.tokyo === 'boolean' ? parsed.tokyo : (typeof parsed.asia === 'boolean' ? parsed.asia : initial.tokyo),
           london: typeof parsed.london === 'boolean' ? parsed.london : initial.london,
           newyork: typeof parsed.newyork === 'boolean' ? parsed.newyork : initial.newyork,
-          sydney: typeof parsed.sydney === 'boolean' ? parsed.sydney : initial.sydney,
-        };
+          sydney: typeof parsed.sydney === 'boolean' ? parsed.sydney : initial.sydney };
       }
     } catch { /* ignore */ }
     return initial;
@@ -169,8 +164,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       amount: p.amount,
       pnl: p.pnl,
       time: p.time,
-      isClosed: false,
-    })));
+      isClosed: false })));
     list.push(...closedList.map((t) => ({
       id: t.id,
       symbol: t.symbol,
@@ -181,8 +175,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       time: t.time,
       isClosed: true,
       exitPrice: t.exitPrice,
-      closeReason: t.closeReason,
-    })));
+      closeReason: t.closeReason })));
     return list;
   }, [animTradeFilter, positions, closedTrades]);
 
@@ -220,8 +213,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
     showSessionShading,
     symbolTradesToAnimate,
     showTradeAnimations,
-    showPatternBeams,
-  });
+    showPatternBeams });
 
   // --- Persist drawings per symbol ---
   useEffect(() => {
@@ -263,8 +255,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       handleChartSnapshot(imageDataUrl);
       window.dispatchEvent(
         new CustomEvent('apexfx:snapshot', {
-          detail: { imageDataUrl, symbol, timeframe },
-        })
+          detail: { imageDataUrl, symbol, timeframe } })
       );
     }
   }, [symbol, timeframe]);
