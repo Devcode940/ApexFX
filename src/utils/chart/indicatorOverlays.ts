@@ -13,7 +13,10 @@ import {
   SeriesMarkerBar,
   LineData,
   BarData,
-  HistogramData } from 'lightweight-charts';
+  HistogramData,
+  CrosshairMode,
+  createTextWatermark,
+} from 'lightweight-charts';
 import type { Candlestick, Pattern } from '../../types';
 import type { AnnotationDrawing, ChartTheme, ChartPoint, DrawingsState } from '../../types/chart';
 import {
@@ -39,28 +42,84 @@ export function getChartThemeColors(theme: ChartTheme): ChartThemeColors {
     : { background: '#ffffff', text: '#52525b', grid: '#f4f4f5', border: '#e4e4e7', crosshairLabelBackground: '#18181b' };
 }
 
-/** Main OHLC chart with visible time scale. */
-export function createMainChart(container: HTMLDivElement, height: number, theme: ChartTheme): IChartApi {
+/** Main OHLC chart with visible time scale and TradingView native configurations. */
+export function createMainChart(
+  container: HTMLDivElement,
+  height: number,
+  theme: ChartTheme,
+  symbol = 'EURUSD',
+  timeframe = '1H',
+  magnet = false
+): IChartApi {
   const colors = getChartThemeColors(theme);
-  return createChart(container, {
+  const chart = createChart(container, {
     width: container.clientWidth,
     height,
     layout: {
       background: { type: ColorType.Solid, color: colors.background },
-      textColor: colors.text },
+      textColor: colors.text,
+      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    },
     grid: {
       vertLines: { color: colors.grid },
-      horzLines: { color: colors.grid } },
+      horzLines: { color: colors.grid },
+    },
     rightPriceScale: {
       borderColor: colors.border,
-      autoScale: true },
+      autoScale: true,
+      scaleMargins: { top: 0.1, bottom: 0.1 },
+    },
     timeScale: {
       borderColor: colors.border,
       timeVisible: true,
-      secondsVisible: false },
+      secondsVisible: false,
+      rightOffset: 12,
+      barSpacing: 10,
+      minBarSpacing: 3,
+    },
     crosshair: {
+      mode: magnet ? CrosshairMode.MagnetOHLC : CrosshairMode.Normal,
       horzLine: { labelBackgroundColor: colors.crosshairLabelBackground },
-      vertLine: { labelBackgroundColor: colors.crosshairLabelBackground } } });
+      vertLine: { labelBackgroundColor: colors.crosshairLabelBackground },
+    },
+    handleScale: {
+      axisPressedMouseMove: { time: true, price: true },
+      mouseWheel: true,
+      pinch: true,
+    },
+    handleScroll: {
+      mouseWheel: true,
+      pressedMouseMove: true,
+      horzTouchDrag: true,
+      vertTouchDrag: true,
+    },
+  });
+
+  try {
+    const firstPane = chart.panes()[0];
+    if (firstPane) {
+      createTextWatermark(firstPane, {
+        horzAlign: 'center',
+        vertAlign: 'center',
+        lines: [
+          {
+            text: `${symbol} • ${timeframe}`,
+            color: theme === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+            fontSize: 48,
+          },
+          {
+            text: 'TradingView™ Lightweight Charts',
+            color: theme === 'dark' ? 'rgba(16, 185, 129, 0.08)' : 'rgba(16, 185, 129, 0.08)',
+            fontSize: 16,
+          },
+        ],
+      });
+    }
+  } catch {
+    // Ignore watermark attachment in minimal container environments
+  }
+
+  return chart;
 }
 
 /** Linked sub-chart (RSI / MACD) with hidden time scale. */
