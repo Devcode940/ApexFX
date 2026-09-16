@@ -271,6 +271,10 @@ export const ChartHeader: React.FC<ChartHeaderProps> = ({
         <span className={`font-display font-black text-sm ${theme === 'dark' ? 'text-zinc-100' : 'text-zinc-900'} flex items-center gap-1.5 leading-none`}>
           {symbol.length === 6 ? `${symbol.slice(0, 3)}/${symbol.slice(3)}` : symbol}
           <span className="text-emerald-400 text-[10px] px-1 py-0.5 rounded bg-emerald-950/40 border border-emerald-900/30 uppercase font-mono">{timeframe}</span>
+          <span className="hidden xl:inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/50" title="TradingView Lightweight Charts v5.2 Canvas Engine Active">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            TradingView™ v5.2
+          </span>
         </span>
 
         {/* Economic News Radar Pill */}
