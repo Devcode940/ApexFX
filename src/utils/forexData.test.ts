@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Candlestick } from '../types';
 import { formatPrice, getContractSize, computeSMA, computeRSI, calculateVolatilityDetails, detectPatterns, generateSignal } from './forexData';
 import { calculateConfluenceScore } from './confluenceEngine';
+import { findMagnetPrice, computeRulerStats, loadDrawings, saveDrawings } from './chart/drawingTools';
 /** Deterministic candles for unit tests only (never used in the app). */
 function makeCandles(count: number, startPrice = 1.08): Candlestick[] {
   const out: Candlestick[] = [];
@@ -177,5 +178,64 @@ describe('calculateConfluenceScore', () => {
     expect(confluence.macroScore).toBeGreaterThanOrEqual(-20);
     expect(confluence.macroScore).toBeLessThanOrEqual(20);
     expect(confluence.reasons.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Drawing & Measurement Tools', () => {
+  const sampleCandles: Candlestick[] = [
+    { time: 1000, open: 1.0800, high: 1.0850, low: 1.0780, close: 1.0830, volume: 100 },
+    { time: 2000, open: 1.0830, high: 1.0900, low: 1.0820, close: 1.0880, volume: 150 },
+    { time: 3000, open: 1.0880, high: 1.0920, low: 1.0860, close: 1.0910, volume: 200 },
+  ];
+
+  it('snaps price to closest candle OHLC when magnet mode is used', () => {
+    // Near candle at t=1000, close to 1.0848 (should snap to high: 1.0850)
+    const snappedHigh = findMagnetPrice(1.0848, 1005, sampleCandles);
+    expect(snappedHigh).toBe(1.0850);
+
+    // Near candle at t=1000, close to 1.0782 (should snap to low: 1.0780)
+    const snappedLow = findMagnetPrice(1.0782, 1010, sampleCandles);
+    expect(snappedLow).toBe(1.0780);
+  });
+
+  it('calculates accurate distance, elapsed bars, and pips with computeRulerStats', () => {
+    const start = { time: 1000, price: 1.0800 };
+    const end = { time: 3000, price: 1.0900 };
+    const stats = computeRulerStats(start, end, sampleCandles, 'EURUSD');
+
+    expect(stats.bars).toBe(3);
+    expect(stats.pips).toBe(100); // 1.0900 - 1.0800 = 0.0100 = 100 pips
+    expect(stats.percent).toBeCloseTo(0.93, 1);
+  });
+
+  it('persists and loads drawings state with extended tools', () => {
+    const testSymbol = 'TESTPAIR';
+    const sampleDrawings = {
+      horizontalLines: [{ price: 1.0850, color: '#10b981' }],
+      trendlines: [{ start: { time: 1000, price: 1.08 }, end: { time: 2000, price: 1.09 } }],
+      horizontalRays: [{ id: 'ray-1', start: { time: 1000, price: 1.085 } }],
+      verticalLines: [{ id: 'vline-1', time: 1000 }],
+      parallelChannels: [],
+      annotations: [],
+      callouts: [{ id: 'call-1', target: { time: 1000, price: 1.08 }, text: 'Reversal' }],
+      priceLabels: [{ id: 'pl-1', point: { time: 1000, price: 1.08 } }],
+      arrows: [],
+      riskRewards: [],
+      fibonacci: [],
+      fibExtensions: [],
+      gannBoxes: [],
+      rectangles: [{ id: 'rect-1', start: { time: 1000, price: 1.08 }, end: { time: 2000, price: 1.09 } }],
+      circles: [],
+      rulers: [],
+      chartPatterns: [],
+    };
+
+    saveDrawings(testSymbol, sampleDrawings);
+    const loaded = loadDrawings(testSymbol);
+
+    expect(loaded.horizontalRays?.length).toBe(1);
+    expect(loaded.rectangles?.length).toBe(1);
+    expect(loaded.callouts?.length).toBe(1);
+    expect(loaded.horizontalLines.length).toBe(1);
   });
 });

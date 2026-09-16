@@ -13,6 +13,7 @@ import type {
   ChartTheme,
   DrawingsState,
   DrawingTool,
+  CursorType,
   HudData,
   PatternMarkerFilter,
   SidebarTab } from '../types/chart';
@@ -81,6 +82,10 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   const [fibStart, setFibStart] = useState<ChartPoint | null>(null);
   const [selectedColor, setSelectedColor] = useState('#eab308');
   const [showDrawingsManager, setShowDrawingsManager] = useState(false);
+  const [magnetMode, setMagnetMode] = useState(false);
+  const [lockDrawings, setLockDrawings] = useState(false);
+  const [hideAllDrawings, setHideAllDrawings] = useState(false);
+  const [cursorType, setCursorType] = useState<CursorType>('crosshair');
 
   // --- Pattern Layer State ---
   const [showPatternMarkers, setShowPatternMarkers] = useState(true);
@@ -213,7 +218,11 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
     showSessionShading,
     symbolTradesToAnimate,
     showTradeAnimations,
-    showPatternBeams });
+    showPatternBeams,
+    magnetMode,
+    lockDrawings,
+    cursorType,
+  });
 
   // --- Persist drawings per symbol ---
   useEffect(() => {
@@ -319,7 +328,15 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
           activeTool={activeTool}
           selectedColor={selectedColor}
           showDrawingsManager={showDrawingsManager}
+          magnetMode={magnetMode}
+          lockDrawings={lockDrawings}
+          hideAllDrawings={hideAllDrawings}
+          cursorType={cursorType}
           onSelectTool={setActiveTool}
+          onToggleMagnetMode={() => setMagnetMode((v) => !v)}
+          onToggleLockDrawings={() => setLockDrawings((v) => !v)}
+          onToggleHideDrawings={() => setHideAllDrawings((v) => !v)}
+          onSelectCursorType={setCursorType}
           onFitContent={handleFitContent}
           onSelectColor={setSelectedColor}
           onToggleDrawingsManager={() => setShowDrawingsManager((v) => !v)}
@@ -352,6 +369,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
               symbolTradesToAnimate={filteredTradesForAnim}
               showPatternBeams={showPatternBeams}
               hudData={hudData}
+              hideAllDrawings={hideAllDrawings}
             />
           </div>
 

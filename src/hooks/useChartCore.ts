@@ -18,6 +18,7 @@ import type {
   ChartTheme,
   DrawingsState,
   DrawingTool,
+  CursorType,
   HudData,
 } from '../types/chart';
 import {
@@ -34,7 +35,13 @@ import {
   toCandlestickData,
   toEpochSeconds,
 } from '../utils/chart/indicatorOverlays';
-import { createHorizontalPriceLines, createTrendlineSeries, newRiskRewardTool } from '../utils/chart/drawingTools';
+import {
+  createHorizontalPriceLines,
+  createTrendlineSeries,
+  newRiskRewardTool,
+  findMagnetPrice,
+  computeRulerStats,
+} from '../utils/chart/drawingTools';
 import { computeRSI, PAIRS_CONFIG } from '../utils/forexData';
 
 export interface UseChartCoreParams {
@@ -71,6 +78,9 @@ export interface UseChartCoreParams {
   symbolTradesToAnimate: AnimatedTrade[];
   showTradeAnimations: boolean;
   showPatternBeams: boolean;
+  magnetMode?: boolean;
+  lockDrawings?: boolean;
+  cursorType?: CursorType;
 }
 
 type ChartRefs = {
@@ -120,6 +130,9 @@ export function useChartCore(params: UseChartCoreParams): void {
     symbolTradesToAnimate,
     showTradeAnimations,
     showPatternBeams,
+    magnetMode = false,
+    lockDrawings = false,
+    cursorType = 'crosshair',
   } = params;
 
   // Refs for stable callbacks
@@ -140,6 +153,17 @@ export function useChartCore(params: UseChartCoreParams): void {
 
   const sessionBlocksRef = useRef<SessionBlock[]>(sessionBlocks);
   useEffect(() => { sessionBlocksRef.current = sessionBlocks; }, [sessionBlocks]);
+
+  const magnetModeRef = useRef<boolean>(magnetMode);
+  useEffect(() => { magnetModeRef.current = magnetMode; }, [magnetMode]);
+
+  const lockDrawingsRef = useRef<boolean>(lockDrawings);
+  useEffect(() => { lockDrawingsRef.current = lockDrawings; }, [lockDrawings]);
+
+  const cursorTypeRef = useRef<CursorType>(cursorType);
+  useEffect(() => { cursorTypeRef.current = cursorType; }, [cursorType]);
+
+  const multiPointsRef = useRef<ChartPoint[]>([]);
 
   const showSessionShadingRef = useRef(showSessionShading);
   useEffect(() => { showSessionShadingRef.current = showSessionShading; }, [showSessionShading]);
@@ -288,53 +312,281 @@ export function useChartCore(params: UseChartCoreParams): void {
 
     const handleChartClick = (param: MouseEventParams) => {
       if (!param.point || !param.time) return;
+      if (lockDrawingsRef.current) return; // Prevent edits when locked
+
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price === null) return;
       const clickedTime = toEpochSeconds(param.time);
       if (clickedTime === undefined) return;
 
-      if (activeToolRef.current === 'horizontal') {
+      const effectivePrice = magnetModeRef.current ? findMagnetPrice(price, clickedTime, data) : price;
+      const pt: ChartPoint = { time: clickedTime, price: effectivePrice };
+      const currentTool = activeToolRef.current;
+
+      // Eraser
+      if (cursorTypeRef.current === 'eraser' || currentTool === 'cursor_eraser') {
+        const pip = Math.pow(10, -(config.pipDecimal || 4));
+        setDrawings((prev) => {
+          const hl = prev.horizontalLines.filter((l) => {
+            const p = typeof l === 'number' ? l : l.price;
+            return Math.abs(p - effectivePrice) > pip * 15;
+          });
+          if (hl.length !== prev.horizontalLines.length) return { ...prev, horizontalLines: hl };
+
+          const tl = prev.trendlines.filter((t) => {
+            const mid = (t.start.price + t.end.price) / 2;
+            return Math.abs(mid - effectivePrice) > pip * 15;
+          });
+          if (tl.length !== prev.trendlines.length) return { ...prev, trendlines: tl };
+
+          if ((prev.rectangles || []).length > 0) return { ...prev, rectangles: prev.rectangles!.slice(0, -1) };
+          if ((prev.rulers || []).length > 0) return { ...prev, rulers: prev.rulers!.slice(0, -1) };
+          if ((prev.fibonacci || []).length > 0) return { ...prev, fibonacci: prev.fibonacci!.slice(0, -1) };
+          if ((prev.horizontalLines || []).length > 0) return { ...prev, horizontalLines: prev.horizontalLines!.slice(0, -1) };
+          return prev;
+        });
+        return;
+      }
+
+      // Trend tools
+      if (currentTool === 'horizontal') {
         setDrawings((prev) => ({
           ...prev,
-          horizontalLines: [...prev.horizontalLines, { price: parseFloat(price.toFixed(config.pipDecimal + 1)), color: selectedColorRef.current }],
+          horizontalLines: [...prev.horizontalLines, { price: parseFloat(effectivePrice.toFixed(config.pipDecimal + 1)), color: selectedColorRef.current }],
         }));
         setActiveTool('none');
-      } else if (activeToolRef.current === 'trendline_start') {
-        setTrendlineStart({ time: clickedTime, price });
+      } else if (currentTool === 'horizontal_ray') {
+        setDrawings((prev) => ({
+          ...prev,
+          horizontalRays: [...(prev.horizontalRays || []), { id: Date.now().toString(), start: pt, color: selectedColorRef.current }],
+        }));
+        setActiveTool('none');
+      } else if (currentTool === 'vertical_line') {
+        setDrawings((prev) => ({
+          ...prev,
+          verticalLines: [...(prev.verticalLines || []), { id: Date.now().toString(), time: clickedTime, color: selectedColorRef.current, label: 'TIME MARK' }],
+        }));
+        setActiveTool('none');
+      } else if (currentTool === 'trendline_start') {
+        setTrendlineStart(pt);
         setActiveTool('trendline_end');
-      } else if (activeToolRef.current === 'trendline_end' && trendlineStartRef.current) {
+      } else if (currentTool === 'trendline_end' && trendlineStartRef.current) {
         const start = trendlineStartRef.current;
         setDrawings((prev) => ({
           ...prev,
-          trendlines: [...prev.trendlines, { start, end: { time: clickedTime, price }, color: selectedColorRef.current }],
+          trendlines: [...prev.trendlines, { start, end: pt, color: selectedColorRef.current }],
         }));
         setTrendlineStart(null);
         setActiveTool('none');
-      } else if (activeToolRef.current === 'rr_long' || activeToolRef.current === 'rr_short') {
-        const rrType = activeToolRef.current === 'rr_long' ? 'long' : 'short';
-        const tool = newRiskRewardTool(rrType, { time: clickedTime, price }, symbol);
-        setDrawings((prev) => ({ ...prev, riskRewards: [...(prev.riskRewards || []), tool] }));
+      } else if (currentTool === 'channel_p1') {
+        multiPointsRef.current = [pt];
+        setActiveTool('channel_p2');
+      } else if (currentTool === 'channel_p2') {
+        multiPointsRef.current.push(pt);
+        setActiveTool('channel_p3');
+      } else if (currentTool === 'channel_p3' && multiPointsRef.current.length >= 2) {
+        const [p1, p2] = multiPointsRef.current;
+        setDrawings((prev) => ({
+          ...prev,
+          parallelChannels: [...(prev.parallelChannels || []), { id: Date.now().toString(), p1, p2, p3: pt, color: selectedColorRef.current }],
+        }));
+        multiPointsRef.current = [];
         setActiveTool('none');
-      } else if (activeToolRef.current === 'fib_start') {
-        setFibStart({ time: clickedTime, price });
+      }
+      // Fibonacci & Gann tools
+      else if (currentTool === 'fib_start') {
+        setFibStart(pt);
         setActiveTool('fib_end');
-      } else if (activeToolRef.current === 'fib_end' && fibStartRef.current) {
+      } else if (currentTool === 'fib_end' && fibStartRef.current) {
         const start = fibStartRef.current;
         setDrawings((prev) => ({
           ...prev,
-          fibonacci: [...(prev.fibonacci || []), { id: Date.now().toString(), start, end: { time: clickedTime, price }, color: selectedColorRef.current }],
+          fibonacci: [...(prev.fibonacci || []), { id: Date.now().toString(), start, end: pt, color: selectedColorRef.current }],
         }));
         setFibStart(null);
         setActiveTool('none');
-      } else if (activeToolRef.current === 'annotation') {
+      } else if (currentTool === 'fib_ext_p1') {
+        multiPointsRef.current = [pt];
+        setActiveTool('fib_ext_p2');
+      } else if (currentTool === 'fib_ext_p2') {
+        multiPointsRef.current.push(pt);
+        setActiveTool('fib_ext_p3');
+      } else if (currentTool === 'fib_ext_p3' && multiPointsRef.current.length >= 2) {
+        const [p1, p2] = multiPointsRef.current;
+        setDrawings((prev) => ({
+          ...prev,
+          fibExtensions: [...(prev.fibExtensions || []), { id: Date.now().toString(), p1, p2, p3: pt, color: selectedColorRef.current }],
+        }));
+        multiPointsRef.current = [];
+        setActiveTool('none');
+      } else if (currentTool === 'gann_box_p1') {
+        multiPointsRef.current = [pt];
+        setActiveTool('gann_box_p2');
+      } else if (currentTool === 'gann_box_p2' && multiPointsRef.current.length >= 1) {
+        const [start] = multiPointsRef.current;
+        setDrawings((prev) => ({
+          ...prev,
+          gannBoxes: [...(prev.gannBoxes || []), { id: Date.now().toString(), start, end: pt, color: selectedColorRef.current }],
+        }));
+        multiPointsRef.current = [];
+        setActiveTool('none');
+      }
+      // Geometric shapes
+      else if (currentTool === 'rect_start') {
+        multiPointsRef.current = [pt];
+        setActiveTool('rect_end');
+      } else if (currentTool === 'rect_end' && multiPointsRef.current.length >= 1) {
+        const [start] = multiPointsRef.current;
+        setDrawings((prev) => ({
+          ...prev,
+          rectangles: [...(prev.rectangles || []), { id: Date.now().toString(), start, end: pt, color: selectedColorRef.current, label: 'ORDER BLOCK' }],
+        }));
+        multiPointsRef.current = [];
+        setActiveTool('none');
+      } else if (currentTool === 'circle_start') {
+        multiPointsRef.current = [pt];
+        setActiveTool('circle_end');
+      } else if (currentTool === 'circle_end' && multiPointsRef.current.length >= 1) {
+        const [center] = multiPointsRef.current;
+        setDrawings((prev) => ({
+          ...prev,
+          circles: [...(prev.circles || []), { id: Date.now().toString(), center, edge: pt, color: selectedColorRef.current }],
+        }));
+        multiPointsRef.current = [];
+        setActiveTool('none');
+      } else if (currentTool === 'brush') {
+        setDrawings((prev) => ({
+          ...prev,
+          circles: [...(prev.circles || []), { id: Date.now().toString(), center: pt, edge: { time: pt.time + 3600, price: pt.price + 0.0004 }, color: selectedColorRef.current }],
+        }));
+        setActiveTool('none');
+      }
+      // Forecasting & Measurement
+      else if (currentTool === 'rr_long' || currentTool === 'rr_short') {
+        const rrType = currentTool === 'rr_long' ? 'long' : 'short';
+        const tool = newRiskRewardTool(rrType, pt, symbol);
+        setDrawings((prev) => ({ ...prev, riskRewards: [...(prev.riskRewards || []), tool] }));
+        setActiveTool('none');
+      } else if (currentTool === 'ruler_start') {
+        multiPointsRef.current = [pt];
+        setActiveTool('ruler_end');
+      } else if (currentTool === 'ruler_end' && multiPointsRef.current.length >= 1) {
+        const [start] = multiPointsRef.current;
+        const ruler = computeRulerStats(start, pt, data, symbol);
+        setDrawings((prev) => ({
+          ...prev,
+          rulers: [...(prev.rulers || []), ruler],
+        }));
+        multiPointsRef.current = [];
+        setActiveTool('none');
+      }
+      // Annotation tools
+      else if (currentTool === 'annotation') {
         const text = window.prompt('Enter text for label annotation:');
         if (text && text.trim()) {
           setDrawings((prev) => ({
             ...prev,
-            annotations: [...prev.annotations, { time: clickedTime, price, text: text.trim(), color: selectedColorRef.current }],
+            annotations: [...prev.annotations, { time: clickedTime, price: effectivePrice, text: text.trim(), color: selectedColorRef.current }],
           }));
         }
         setActiveTool('none');
+      } else if (currentTool === 'callout') {
+        const text = window.prompt('Enter callout comment:') || 'Key Pivot';
+        if (text.trim()) {
+          setDrawings((prev) => ({
+            ...prev,
+            callouts: [...(prev.callouts || []), { id: Date.now().toString(), target: pt, text: text.trim(), color: selectedColorRef.current }],
+          }));
+        }
+        setActiveTool('none');
+      } else if (currentTool === 'price_label') {
+        setDrawings((prev) => ({
+          ...prev,
+          priceLabels: [...(prev.priceLabels || []), { id: Date.now().toString(), point: pt, color: selectedColorRef.current }],
+        }));
+        setActiveTool('none');
+      } else if (currentTool === 'arrow_up') {
+        setDrawings((prev) => ({
+          ...prev,
+          arrows: [...(prev.arrows || []), { id: Date.now().toString(), point: pt, direction: 'up', color: selectedColorRef.current }],
+        }));
+        setActiveTool('none');
+      } else if (currentTool === 'arrow_down') {
+        setDrawings((prev) => ({
+          ...prev,
+          arrows: [...(prev.arrows || []), { id: Date.now().toString(), point: pt, direction: 'down', color: selectedColorRef.current }],
+        }));
+        setActiveTool('none');
+      }
+      // Pattern tools
+      else if (currentTool.startsWith('pattern_hs_')) {
+        multiPointsRef.current.push(pt);
+        if (currentTool === 'pattern_hs_p1') setActiveTool('pattern_hs_p2');
+        else if (currentTool === 'pattern_hs_p2') setActiveTool('pattern_hs_p3');
+        else if (currentTool === 'pattern_hs_p3') setActiveTool('pattern_hs_p4');
+        else if (currentTool === 'pattern_hs_p4') {
+          setDrawings((prev) => ({
+            ...prev,
+            chartPatterns: [
+              ...(prev.chartPatterns || []),
+              {
+                id: Date.now().toString(),
+                type: 'head_shoulders',
+                points: [...multiPointsRef.current],
+                labels: ['LS', 'Head', 'RS', 'Neckline'],
+                color: selectedColorRef.current,
+              },
+            ],
+          }));
+          multiPointsRef.current = [];
+          setActiveTool('none');
+        }
+      } else if (currentTool.startsWith('pattern_xabcd_')) {
+        multiPointsRef.current.push(pt);
+        if (currentTool === 'pattern_xabcd_p1') setActiveTool('pattern_xabcd_p2');
+        else if (currentTool === 'pattern_xabcd_p2') setActiveTool('pattern_xabcd_p3');
+        else if (currentTool === 'pattern_xabcd_p3') setActiveTool('pattern_xabcd_p4');
+        else if (currentTool === 'pattern_xabcd_p4') setActiveTool('pattern_xabcd_p5');
+        else if (currentTool === 'pattern_xabcd_p5') {
+          setDrawings((prev) => ({
+            ...prev,
+            chartPatterns: [
+              ...(prev.chartPatterns || []),
+              {
+                id: Date.now().toString(),
+                type: 'xabcd',
+                points: [...multiPointsRef.current],
+                labels: ['X', 'A', 'B', 'C', 'D'],
+                color: selectedColorRef.current,
+              },
+            ],
+          }));
+          multiPointsRef.current = [];
+          setActiveTool('none');
+        }
+      } else if (currentTool.startsWith('pattern_elliott_')) {
+        multiPointsRef.current.push(pt);
+        if (currentTool === 'pattern_elliott_p1') setActiveTool('pattern_elliott_p2');
+        else if (currentTool === 'pattern_elliott_p2') setActiveTool('pattern_elliott_p3');
+        else if (currentTool === 'pattern_elliott_p3') setActiveTool('pattern_elliott_p4');
+        else if (currentTool === 'pattern_elliott_p4') setActiveTool('pattern_elliott_p5');
+        else if (currentTool === 'pattern_elliott_p5') {
+          setDrawings((prev) => ({
+            ...prev,
+            chartPatterns: [
+              ...(prev.chartPatterns || []),
+              {
+                id: Date.now().toString(),
+                type: 'elliott_wave',
+                points: [...multiPointsRef.current],
+                labels: ['(1)', '(2)', '(3)', '(4)', '(5)'],
+                color: selectedColorRef.current,
+              },
+            ],
+          }));
+          multiPointsRef.current = [];
+          setActiveTool('none');
+        }
       }
     };
     chart.subscribeClick(handleChartClick);
@@ -385,6 +637,168 @@ export function useChartCore(params: UseChartCoreParams): void {
           const levelPrice = p1 + range * ratio;
           const y = cs.priceToCoordinate(levelPrice);
           if (y !== null) el.style.setProperty(`--fib-y-${ratio.toString().replace('.', '_')}`, `${y}px`);
+        });
+      });
+
+      // Horizontal Rays
+      (drawingsRef.current.horizontalRays || []).forEach((tool) => {
+        const el = document.getElementById(`hray-${tool.id}`);
+        if (!el) return;
+        const startX = chart.timeScale().timeToCoordinate(tool.start.time as UTCTimestamp);
+        const y = cs.priceToCoordinate(tool.start.price);
+        if (startX === null || y === null) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${startX}px`;
+        el.style.top = `${y}px`;
+        el.style.width = `${Math.max(10, (container.clientWidth || 800) - startX)}px`;
+      });
+
+      // Vertical Lines
+      (drawingsRef.current.verticalLines || []).forEach((tool) => {
+        const el = document.getElementById(`vline-${tool.id}`);
+        if (!el) return;
+        const x = chart.timeScale().timeToCoordinate(tool.time as UTCTimestamp);
+        if (x === null) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${x}px`;
+      });
+
+      // Rectangles (Supply/Demand Zones)
+      (drawingsRef.current.rectangles || []).forEach((tool) => {
+        const el = document.getElementById(`rect-${tool.id}`);
+        if (!el) return;
+        const x1 = chart.timeScale().timeToCoordinate(tool.start.time as UTCTimestamp);
+        const x2 = chart.timeScale().timeToCoordinate(tool.end.time as UTCTimestamp);
+        const y1 = cs.priceToCoordinate(tool.start.price);
+        const y2 = cs.priceToCoordinate(tool.end.price);
+        if (x1 === null || x2 === null || y1 === null || y2 === null) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${Math.min(x1, x2)}px`;
+        el.style.top = `${Math.min(y1, y2)}px`;
+        el.style.width = `${Math.max(Math.abs(x2 - x1), 4)}px`;
+        el.style.height = `${Math.max(Math.abs(y2 - y1), 4)}px`;
+      });
+
+      // Circles
+      (drawingsRef.current.circles || []).forEach((tool) => {
+        const el = document.getElementById(`circle-${tool.id}`);
+        if (!el) return;
+        const cx = chart.timeScale().timeToCoordinate(tool.center.time as UTCTimestamp);
+        const cy = cs.priceToCoordinate(tool.center.price);
+        const ex = chart.timeScale().timeToCoordinate(tool.edge.time as UTCTimestamp);
+        const ey = cs.priceToCoordinate(tool.edge.price);
+        if (cx === null || cy === null || ex === null || ey === null) { el.style.display = 'none'; return; }
+        const rx = Math.max(Math.abs(ex - cx), 8);
+        const ry = Math.max(Math.abs(ey - cy), 8);
+        el.style.display = 'block';
+        el.style.left = `${cx - rx}px`;
+        el.style.top = `${cy - ry}px`;
+        el.style.width = `${rx * 2}px`;
+        el.style.height = `${ry * 2}px`;
+      });
+
+      // Gann Boxes
+      (drawingsRef.current.gannBoxes || []).forEach((tool) => {
+        const el = document.getElementById(`gann-${tool.id}`);
+        if (!el) return;
+        const x1 = chart.timeScale().timeToCoordinate(tool.start.time as UTCTimestamp);
+        const x2 = chart.timeScale().timeToCoordinate(tool.end.time as UTCTimestamp);
+        const y1 = cs.priceToCoordinate(tool.start.price);
+        const y2 = cs.priceToCoordinate(tool.end.price);
+        if (x1 === null || x2 === null || y1 === null || y2 === null) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${Math.min(x1, x2)}px`;
+        el.style.top = `${Math.min(y1, y2)}px`;
+        el.style.width = `${Math.max(Math.abs(x2 - x1), 10)}px`;
+        el.style.height = `${Math.max(Math.abs(y2 - y1), 10)}px`;
+      });
+
+      // Fib Extensions
+      (drawingsRef.current.fibExtensions || []).forEach((tool) => {
+        const el = document.getElementById(`fibext-${tool.id}`);
+        if (!el) return;
+        const x1 = chart.timeScale().timeToCoordinate(tool.p1.time as UTCTimestamp);
+        const x2 = chart.timeScale().timeToCoordinate(tool.p2.time as UTCTimestamp);
+        const x3 = chart.timeScale().timeToCoordinate(tool.p3.time as UTCTimestamp);
+        if (x1 === null || x2 === null || x3 === null) { el.style.display = 'none'; return; }
+        const minX = Math.min(x1, x2, x3);
+        const maxX = Math.max(x1, x2, x3);
+        el.style.display = 'block';
+        el.style.left = `${minX}px`;
+        el.style.width = `${Math.max(maxX - minX + 80, 100)}px`;
+        const waveRange = tool.p2.price - tool.p1.price;
+        [0.618, 1.0, 1.272, 1.618].forEach((r) => {
+          const extPrice = tool.p3.price + waveRange * r;
+          const ey = cs.priceToCoordinate(extPrice);
+          if (ey !== null) el.style.setProperty(`--ext-y-${r.toString().replace('.', '_')}`, `${ey}px`);
+        });
+      });
+
+      // Measurement Rulers
+      (drawingsRef.current.rulers || []).forEach((tool) => {
+        const el = document.getElementById(`ruler-${tool.id}`);
+        if (!el) return;
+        const x1 = chart.timeScale().timeToCoordinate(tool.start.time as UTCTimestamp);
+        const x2 = chart.timeScale().timeToCoordinate(tool.end.time as UTCTimestamp);
+        const y1 = cs.priceToCoordinate(tool.start.price);
+        const y2 = cs.priceToCoordinate(tool.end.price);
+        if (x1 === null || x2 === null || y1 === null || y2 === null) { el.style.display = 'none'; return; }
+        el.style.display = 'flex';
+        el.style.left = `${Math.min(x1, x2)}px`;
+        el.style.top = `${Math.min(y1, y2)}px`;
+        el.style.width = `${Math.max(Math.abs(x2 - x1), 10)}px`;
+        el.style.height = `${Math.max(Math.abs(y2 - y1), 10)}px`;
+      });
+
+      // Callouts
+      (drawingsRef.current.callouts || []).forEach((tool) => {
+        const el = document.getElementById(`callout-${tool.id}`);
+        if (!el) return;
+        const x = chart.timeScale().timeToCoordinate(tool.target.time as UTCTimestamp);
+        const y = cs.priceToCoordinate(tool.target.price);
+        if (x === null || y === null) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+      });
+
+      // Price Labels
+      (drawingsRef.current.priceLabels || []).forEach((tool) => {
+        const el = document.getElementById(`plabel-${tool.id}`);
+        if (!el) return;
+        const x = chart.timeScale().timeToCoordinate(tool.point.time as UTCTimestamp);
+        const y = cs.priceToCoordinate(tool.point.price);
+        if (x === null || y === null) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+      });
+
+      // Arrows
+      (drawingsRef.current.arrows || []).forEach((tool) => {
+        const el = document.getElementById(`arrow-${tool.id}`);
+        if (!el) return;
+        const x = chart.timeScale().timeToCoordinate(tool.point.time as UTCTimestamp);
+        const y = cs.priceToCoordinate(tool.point.price);
+        if (x === null || y === null) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+      });
+
+      // Chart Patterns
+      (drawingsRef.current.chartPatterns || []).forEach((tool) => {
+        const el = document.getElementById(`pat-draw-${tool.id}`);
+        if (!el) return;
+        const coords = tool.points.map((p) => ({
+          x: chart.timeScale().timeToCoordinate(p.time as UTCTimestamp),
+          y: cs.priceToCoordinate(p.price),
+        }));
+        if (coords.some((c) => c.x === null || c.y === null)) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        coords.forEach((c, idx) => {
+          el.style.setProperty(`--px-${idx}`, `${c.x}px`);
+          el.style.setProperty(`--py-${idx}`, `${c.y}px`);
         });
       });
 

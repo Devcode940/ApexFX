@@ -196,37 +196,198 @@ export const DrawingsManager: React.FC<DrawingsManagerProps> = ({
         )}
       </div>
 
-      {/* Fibonacci List */}
+      {/* Fibonacci & Gann List */}
       <div className="space-y-1.5 mt-2">
         <div className="text-[10px] font-mono uppercase text-zinc-500 font-bold tracking-wider">
-          Fibonacci ({(drawings.fibonacci || []).length})
+          Fibonacci &amp; Gann ({(drawings.fibonacci || []).length + (drawings.fibExtensions || []).length + (drawings.gannBoxes || []).length})
         </div>
-        {(drawings.fibonacci || []).length === 0 ? (
-          <div className="text-[10px] text-zinc-600 italic px-1">No fibs</div>
+        {(drawings.fibonacci || []).length === 0 && (drawings.fibExtensions || []).length === 0 && (drawings.gannBoxes || []).length === 0 ? (
+          <div className="text-[10px] text-zinc-600 italic px-1">No fib/gann tools</div>
         ) : (
           <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
-            {drawings.fibonacci.map((tool) => {
-              return (
-                <div key={tool.id} className={listRowClass(theme)}>
-                  <div className="flex items-center gap-1.5">
-                    <AlignJustify className="w-3 h-3 text-blue-400" />
-                    <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'} capitalize`}>Fib @ {tool.start.price.toFixed(precision)}</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setDrawings((prev) => ({
-                        ...prev,
-                        fibonacci: prev.fibonacci.filter((t) => t.id !== tool.id),
-                      }));
-                    }}
-                    className="text-zinc-500 hover:text-red-400 p-0.5"
-                    title="Delete tool"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
+            {drawings.fibonacci.map((tool) => (
+              <div key={tool.id} className={listRowClass(theme)}>
+                <div className="flex items-center gap-1.5">
+                  <AlignJustify className="w-3 h-3 text-blue-400" />
+                  <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'} capitalize`}>Fib @ {tool.start.price.toFixed(precision)}</span>
                 </div>
-              );
-            })}
+                <button
+                  onClick={() => {
+                    setDrawings((prev) => ({
+                      ...prev,
+                      fibonacci: prev.fibonacci.filter((t) => t.id !== tool.id),
+                    }));
+                  }}
+                  className="text-zinc-500 hover:text-red-400 p-0.5"
+                  title="Delete fib"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+            {(drawings.fibExtensions || []).map((tool) => (
+              <div key={tool.id} className={listRowClass(theme)}>
+                <div className="flex items-center gap-1.5">
+                  <AlignJustify className="w-3 h-3 text-cyan-400" />
+                  <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'} capitalize`}>Fib Ext @ {tool.p1.price.toFixed(precision)}</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setDrawings((prev) => ({
+                      ...prev,
+                      fibExtensions: (prev.fibExtensions || []).filter((t) => t.id !== tool.id),
+                    }));
+                  }}
+                  className="text-zinc-500 hover:text-red-400 p-0.5"
+                  title="Delete fib ext"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+            {(drawings.gannBoxes || []).map((tool) => (
+              <div key={tool.id} className={listRowClass(theme)}>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-sm bg-amber-400" />
+                  <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'}`}>Gann Box</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setDrawings((prev) => ({
+                      ...prev,
+                      gannBoxes: (prev.gannBoxes || []).filter((t) => t.id !== tool.id),
+                    }));
+                  }}
+                  className="text-zinc-500 hover:text-red-400 p-0.5"
+                  title="Delete gann box"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Geometric Zones & Shapes List */}
+      <div className="space-y-1.5 mt-2">
+        <div className="text-[10px] font-mono uppercase text-zinc-500 font-bold tracking-wider">
+          Zones &amp; Shapes ({(drawings.rectangles || []).length + (drawings.circles || []).length})
+        </div>
+        {(drawings.rectangles || []).length === 0 && (drawings.circles || []).length === 0 ? (
+          <div className="text-[10px] text-zinc-600 italic px-1">No zones</div>
+        ) : (
+          <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+            {(drawings.rectangles || []).map((tool) => (
+              <div key={tool.id} className={listRowClass(theme)}>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded border" style={{ borderColor: tool.color || '#10b981', backgroundColor: `${tool.color || '#10b981'}40` }} />
+                  <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'} uppercase`}>{tool.label || 'Zone'}</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setDrawings((prev) => ({
+                      ...prev,
+                      rectangles: (prev.rectangles || []).filter((t) => t.id !== tool.id),
+                    }));
+                  }}
+                  className="text-zinc-500 hover:text-red-400 p-0.5"
+                  title="Delete zone"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+            {(drawings.circles || []).map((tool) => (
+              <div key={tool.id} className={listRowClass(theme)}>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full border" style={{ borderColor: tool.color || '#a855f7' }} />
+                  <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'}`}>Circle</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setDrawings((prev) => ({
+                      ...prev,
+                      circles: (prev.circles || []).filter((t) => t.id !== tool.id),
+                    }));
+                  }}
+                  className="text-zinc-500 hover:text-red-400 p-0.5"
+                  title="Delete circle"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Measurement Rulers List */}
+      <div className="space-y-1.5 mt-2">
+        <div className="text-[10px] font-mono uppercase text-zinc-500 font-bold tracking-wider">
+          Rulers &amp; Measurements ({(drawings.rulers || []).length})
+        </div>
+        {(drawings.rulers || []).length === 0 ? (
+          <div className="text-[10px] text-zinc-600 italic px-1">No rulers</div>
+        ) : (
+          <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+            {(drawings.rulers || []).map((tool) => (
+              <div key={tool.id} className={listRowClass(theme)}>
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="text-cyan-400 font-bold">📏</span>
+                  <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'} truncate`}>
+                    {tool.bars}b ({tool.pips} pips)
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    setDrawings((prev) => ({
+                      ...prev,
+                      rulers: (prev.rulers || []).filter((t) => t.id !== tool.id),
+                    }));
+                  }}
+                  className="text-zinc-500 hover:text-red-400 p-0.5"
+                  title="Delete ruler"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Harmonic & Wave Patterns List */}
+      <div className="space-y-1.5 mt-2">
+        <div className="text-[10px] font-mono uppercase text-zinc-500 font-bold tracking-wider">
+          Harmonic &amp; Wave Patterns ({(drawings.chartPatterns || []).length})
+        </div>
+        {(drawings.chartPatterns || []).length === 0 ? (
+          <div className="text-[10px] text-zinc-600 italic px-1">No pattern drawings</div>
+        ) : (
+          <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+            {(drawings.chartPatterns || []).map((tool) => (
+              <div key={tool.id} className={listRowClass(theme)}>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tool.color || '#a855f7' }} />
+                  <span className={`${theme === 'dark' ? 'text-zinc-300' : 'text-zinc-700'} uppercase font-bold text-[9px]`}>
+                    {tool.type.replace('_', ' ')}
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    setDrawings((prev) => ({
+                      ...prev,
+                      chartPatterns: (prev.chartPatterns || []).filter((t) => t.id !== tool.id),
+                    }));
+                  }}
+                  className="text-zinc-500 hover:text-red-400 p-0.5"
+                  title="Delete pattern drawing"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </div>
