@@ -352,7 +352,7 @@ function TradingTerminal() {
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <EconomicCalendar selectedSymbol={selectedSymbol} />
               <div className="flex flex-col gap-4">
-                <CurrencyStrengthMeter />
+                <CurrencyStrengthMeter onSelectPair={(sym) => setSelectedSymbol(sym)} />
                 <MacroSentimentGauge selectedSymbol={selectedSymbol} />
               </div>
             </div>
@@ -419,7 +419,7 @@ function TradingTerminal() {
             {mobileTab === 'macro' && (
               <div className="space-y-4">
                 <EconomicCalendar selectedSymbol={selectedSymbol} />
-                <CurrencyStrengthMeter />
+                <CurrencyStrengthMeter onSelectPair={(sym) => { setSelectedSymbol(sym); setMobileTab('chart'); }} />
                 <MacroSentimentGauge selectedSymbol={selectedSymbol} />
               </div>
             )}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Gauge, ArrowUpRight, ArrowDownRight, Zap, RefreshCw } from 'lucide-react';
+import { PAIRS_CONFIG } from '../utils/forexData';
 
 export interface CurrencyStrengthItem {
   currency: string;
@@ -38,9 +39,20 @@ export function CurrencyStrengthMeter({ onSelectPair }: CurrencyStrengthMeterPro
   const strongest = data[0];
   const weakest = data[data.length - 1];
 
-  const suggestedPair = strongest && weakest && strongest.currency !== weakest.currency
-    ? `${strongest.currency}${weakest.currency}`
-    : null;
+  let suggestedSymbol: string | null = null;
+  let suggestedAction: 'LONG' | 'SHORT' = 'LONG';
+
+  if (strongest && weakest && strongest.currency !== weakest.currency) {
+    const direct = `${strongest.currency}${weakest.currency}`;
+    const inverse = `${weakest.currency}${strongest.currency}`;
+    if (PAIRS_CONFIG[direct]) {
+      suggestedSymbol = direct;
+      suggestedAction = 'LONG';
+    } else if (PAIRS_CONFIG[inverse]) {
+      suggestedSymbol = inverse;
+      suggestedAction = 'SHORT';
+    }
+  }
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col gap-3">
@@ -72,21 +84,23 @@ export function CurrencyStrengthMeter({ onSelectPair }: CurrencyStrengthMeterPro
       </div>
 
       {/* Suggested Confluence Setup Banner */}
-      {suggestedPair && (
+      {suggestedSymbol && (
         <div className="bg-gradient-to-r from-emerald-950/30 via-zinc-900 to-zinc-900 border border-emerald-500/30 rounded-lg p-2.5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-emerald-400 shrink-0" />
             <div className="text-[10px]">
               <span className="font-bold text-emerald-300">Confluence Setup:</span>{' '}
-              <span className="text-zinc-200 font-mono font-bold">{strongest.currency} (Strong: {strongest.strength}) vs {weakest.currency} (Weak: {weakest.strength})</span>
+              <span className="text-zinc-200 font-mono font-bold">
+                {strongest.currency} (Strong: {strongest.strength}) vs {weakest.currency} (Weak: {weakest.strength})
+              </span>
             </div>
           </div>
           <button
-            onClick={() => onSelectPair && onSelectPair(suggestedPair)}
+            onClick={() => onSelectPair && onSelectPair(suggestedSymbol!)}
             className="text-[10px] font-mono text-emerald-400 font-bold px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 hover:bg-emerald-900 hover:border-emerald-400 transition-all cursor-pointer shadow-sm flex items-center gap-1"
-            title={`One-Click Switch chart to ${strongest.currency}/${weakest.currency}`}
+            title={`Switch active chart to ${suggestedSymbol.slice(0, 3)}/${suggestedSymbol.slice(3)}`}
           >
-            <span>LONG {strongest.currency}/{weakest.currency}</span>
+            <span>{suggestedAction} {suggestedSymbol.slice(0, 3)}/{suggestedSymbol.slice(3)}</span>
             <ArrowUpRight className="w-3 h-3" />
           </button>
         </div>

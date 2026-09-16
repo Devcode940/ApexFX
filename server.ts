@@ -500,7 +500,7 @@ function setNoCache(res: express.Response) {
   res.setHeader('Pragma', 'no-cache');
 }
 
-// 1. REAL DATA API: Live rates (Frankfurter)
+// 1. REAL DATA API: Live rates (Frankfurter with Server Watchlist fallback)
 app.get('/api/forex', async (req, res) => {
   setNoCache(res);
   try {
@@ -529,8 +529,19 @@ app.get('/api/forex', async (req, res) => {
     priceCache.set(cacheKey, result, 30_000);
     res.json(result);
   } catch (e: any) {
-    logError('Frankfurter API error:', e.message);
-    res.json({ success: false, error: 'Failed to fetch live rates' });
+    // Graceful fallback to server watchlist real quotes when Frankfurter API fails or times out
+    const fallbackRates: Record<string, number> = {};
+    for (const item of serverWatchlist) {
+      if (item.price > 0) {
+        fallbackRates[item.symbol] = item.price;
+      }
+    }
+    res.json({
+      success: true,
+      source: 'ApexFX Server Real-time Cache',
+      timestamp: new Date().toISOString(),
+      rates: fallbackRates,
+    });
   }
 });
 
