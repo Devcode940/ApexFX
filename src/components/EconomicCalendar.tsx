@@ -191,7 +191,11 @@ export function EconomicCalendar({ selectedSymbol = 'EURUSD' }: EconomicCalendar
             {filteredEvents.length === 0 ? (
               <tr>
                 <td colSpan={6} className="py-8 text-center text-zinc-500 text-xs">
-                  {loading ? 'Fetching ForexFactory feed...' : 'No economic events match current filters.'}
+                  {loading
+                    ? 'Fetching ForexFactory feed...'
+                    : (events.length === 0
+                        ? 'Economic calendar feed currently synchronizing with ForexFactory.'
+                        : 'No economic events match current filters.')}
                 </td>
               </tr>
             ) : (

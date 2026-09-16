@@ -47,44 +47,11 @@ export async function fetchEconomicCalendar(): Promise<CalendarEvent[]> {
     }
     return cachedCalendar;
   } catch (err: any) {
-    warn('[Calendar] ForexFactory feed unavailable, returning fallback/cached data:', err.message);
-    if (cachedCalendar.length === 0) {
-      // Provide clean default high-impact schedule if offline
-      cachedCalendar = [
-        {
-          title: 'Fed Interest Rate Decision & FOMC Statement',
-          country: 'USD',
-          date: new Date(now + 2 * 3600 * 1000).toISOString(),
-          impact: 'High',
-          forecast: '5.25%',
-          previous: '5.50%',
-        },
-        {
-          title: 'ECB Monetary Policy Decision',
-          country: 'EUR',
-          date: new Date(now + 5 * 3600 * 1000).toISOString(),
-          impact: 'High',
-          forecast: '3.50%',
-          previous: '3.75%',
-        },
-        {
-          title: 'US Non-Farm Payrolls (NFP)',
-          country: 'USD',
-          date: new Date(now + 24 * 3600 * 1000).toISOString(),
-          impact: 'High',
-          forecast: '175K',
-          previous: '142K',
-        },
-        {
-          title: 'CPI Inflation Rate y/y',
-          country: 'GBP',
-          date: new Date(now + 28 * 3600 * 1000).toISOString(),
-          impact: 'High',
-          forecast: '2.2%',
-          previous: '2.4%',
-        },
-      ];
+    warn('[Calendar] ForexFactory feed unavailable:', err.message);
+    // Return existing valid cached events if available; never fabricate synthetic economic prints
+    if (cachedCalendar.length > 0) {
+      return cachedCalendar;
     }
-    return cachedCalendar;
+    return [];
   }
 }

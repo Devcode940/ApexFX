@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { DERIV_SYMBOLS, DERIV_GRANULARITY_MAP } from './deriv';
 import { TIINGO_TICKERS, TIINGO_RESAMPLE_MAP } from './tiingo';
 import { calculateCurrencyStrength } from './strength';
-import { CENTRAL_BANK_RATES, computeRateDifferential } from './macro';
+import { CENTRAL_BANK_RATES, computeRateDifferential, computeFxMacroSentiment, getMacroOverview } from './macro';
+import { fetchEconomicCalendar } from './calendar';
 
 describe('Deriv Service Configuration', () => {
   it('maps all 8 supported symbols to Deriv format including gold and silver', () => {
@@ -52,6 +53,10 @@ describe('Currency Strength Calculation', () => {
     expect(currencyCodes).toContain('EUR');
     expect(currencyCodes).toContain('GBP');
     expect(currencyCodes).toContain('JPY');
+    expect(currencyCodes).toContain('AUD');
+    expect(currencyCodes).toContain('CAD');
+    expect(currencyCodes).toContain('CHF');
+    expect(currencyCodes).toContain('NZD');
 
     for (const item of strength) {
       expect(item.strength).toBeGreaterThanOrEqual(0);
@@ -79,5 +84,34 @@ describe('Macro & Central Bank Policy Differential', () => {
     expect(usdJpy.baseRate).toBe(CENTRAL_BANK_RATES.USD.rate);
     expect(usdJpy.quoteRate).toBe(CENTRAL_BANK_RATES.JPY.rate);
     expect(usdJpy.spread).toBe(parseFloat((CENTRAL_BANK_RATES.USD.rate - CENTRAL_BANK_RATES.JPY.rate).toFixed(2)));
+  });
+
+  it('computes FX Risk-On vs Risk-Off macro sentiment based on currency basket dynamics', () => {
+    const sentiment = computeFxMacroSentiment();
+    expect(sentiment.score).toBeGreaterThanOrEqual(0);
+    expect(sentiment.score).toBeLessThanOrEqual(100);
+    expect(['Extreme Fear', 'Fear', 'Neutral', 'Greed', 'Extreme Greed']).toContain(sentiment.classification);
+    expect(['Risk-Off (Safe Haven)', 'Neutral', 'Risk-On (High Yield)']).toContain(sentiment.marketBias);
+  });
+
+  it('constructs complete macro overview including rate differentials', async () => {
+    const overview = await getMacroOverview('EURUSD');
+    expect(overview.rates).toBeDefined();
+    expect(overview.sentiment).toBeDefined();
+    expect(overview.differentials['EURUSD']).toBeDefined();
+    expect(overview.activePairDifferential.spread).toBeDefined();
+  });
+});
+
+describe('Economic Calendar Service', () => {
+  it('returns an array of economic events without fabricating unverified releases', async () => {
+    const events = await fetchEconomicCalendar();
+    expect(Array.isArray(events)).toBe(true);
+    for (const ev of events) {
+      expect(ev.title).toBeDefined();
+      expect(ev.country).toBeDefined();
+      expect(ev.date).toBeDefined();
+      expect(['High', 'Medium', 'Low', 'Holiday']).toContain(ev.impact);
+    }
   });
 });

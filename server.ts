@@ -394,8 +394,11 @@ app.get('/api/market/strength', (_req, res) => {
 app.get('/api/market/macro', async (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=120');
   try {
-    const symbol = String(req.query.symbol || 'EURUSD');
-    const overview = await getMacroOverview(symbol);
+    const rawSymbol = String(req.query.symbol || 'EURUSD').toUpperCase();
+    if (!validateSymbolFormat(rawSymbol, false)) {
+      return res.status(400).json({ success: false, error: 'Invalid currency pair symbol format' });
+    }
+    const overview = await getMacroOverview(rawSymbol);
     res.json({ success: true, data: overview });
   } catch (_e) {
     res.status(500).json({ success: false, error: 'Failed to fetch macro data' });

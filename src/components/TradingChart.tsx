@@ -335,19 +335,16 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   }, [symbol]);
 
   // --- Handlers ---
-  const handleTakeSnapshot = useCallback(() => {
+  const handleTakeSnapshot = useCallback(async () => {
     if (chartRef.current) {
       const imageDataUrl = chartRef.current.takeScreenshot().toDataURL('image/png');
-      const textArea = document.createElement('textarea');
-      textArea.value = imageDataUrl;
-      document.body.appendChild(textArea);
-      textArea.select();
       try {
-        document.execCommand('copy');
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(imageDataUrl);
+        }
       } catch {
-        /* ignore */
+        /* ignore permission rejection */
       }
-      document.body.removeChild(textArea);
       // Attach the snapshot to the AI assistant (context state + scroll into view)
       handleChartSnapshot(imageDataUrl);
       window.dispatchEvent(
@@ -355,7 +352,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
           detail: { imageDataUrl, symbol, timeframe } })
       );
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, handleChartSnapshot]);
 
   const handleSetChartHeight = useCallback((height: number) => {
     setPreferredHeight(height);

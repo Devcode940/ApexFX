@@ -23,8 +23,12 @@ export function calculateCurrencyStrength(): CurrencyStrengthItem[] {
     { base: 'EUR', quote: 'USD', change: quoteMap['EURUSD']?.change || 0 },
     { base: 'GBP', quote: 'USD', change: quoteMap['GBPUSD']?.change || 0 },
     { base: 'AUD', quote: 'USD', change: quoteMap['AUDUSD']?.change || 0 },
+    { base: 'NZD', quote: 'USD', change: quoteMap['NZDUSD']?.change || 0 },
     { base: 'USD', quote: 'JPY', change: quoteMap['USDJPY']?.change || 0 },
     { base: 'USD', quote: 'CAD', change: quoteMap['USDCAD']?.change || 0 },
+    { base: 'USD', quote: 'CHF', change: quoteMap['USDCHF']?.change || 0 },
+    { base: 'EUR', quote: 'GBP', change: quoteMap['EURGBP']?.change || 0 },
+    { base: 'EUR', quote: 'JPY', change: quoteMap['EURJPY']?.change || 0 },
     { base: 'GBP', quote: 'JPY', change: quoteMap['GBPJPY']?.change || 0 },
   ];
 

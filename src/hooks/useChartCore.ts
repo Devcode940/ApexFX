@@ -165,6 +165,12 @@ export function useChartCore(params: UseChartCoreParams): void {
   const cursorTypeRef = useRef<CursorType>(cursorType);
   useEffect(() => { cursorTypeRef.current = cursorType; }, [cursorType]);
 
+  const effectiveSubHeight = subChartHeight ?? (isExpandedFullScreen ? 110 : 100);
+  const chartHeightRef = useRef<number>(chartHeight);
+  useEffect(() => { chartHeightRef.current = chartHeight; }, [chartHeight]);
+  const subHeightRef = useRef<number>(effectiveSubHeight);
+  useEffect(() => { subHeightRef.current = effectiveSubHeight; }, [effectiveSubHeight]);
+
   const multiPointsRef = useRef<ChartPoint[]>([]);
 
   const showSessionShadingRef = useRef(showSessionShading);
@@ -298,14 +304,14 @@ export function useChartCore(params: UseChartCoreParams): void {
     });
 
     const resizeObserver = new ResizeObserver((entries) => {
-      if (entries.length === 0 || !containerRef.current) return;
+      if (entries.length === 0 || !containerRef.current || !chartRef.current) return;
       const { width } = entries[0].contentRect;
-      chart.resize(width, chartHeight);
+      chartRef.current.resize(width, chartHeightRef.current);
       if (rsiChartRef.current && rsiContainerRef.current) {
-        rsiChartRef.current.resize(width, effectiveSubHeight);
+        rsiChartRef.current.resize(width, subHeightRef.current);
       }
       if (macdChartRef.current && macdContainerRef.current) {
-        macdChartRef.current.resize(width, effectiveSubHeight);
+        macdChartRef.current.resize(width, subHeightRef.current);
       }
     });
     resizeObserver.observe(container);
@@ -933,7 +939,22 @@ export function useChartCore(params: UseChartCoreParams): void {
       chartRefs.current.candleSeries = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, theme, chartHeight, isExpandedFullScreen, isRsiMinimized, isMacdMinimized, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, data.length, effectiveSubHeight]);
+  }, [symbol, timeframe, theme, isRsiMinimized, isMacdMinimized, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, data.length]);
+
+  // Dedicated chart resizing effect — avoids tearing down canvas series when chart height changes
+  useEffect(() => {
+    const container = containerRef.current;
+    const chart = chartRef.current;
+    if (!container || !chart) return;
+    const width = container.clientWidth || 800;
+    chart.resize(width, chartHeight);
+    if (rsiChartRef.current && rsiContainerRef.current) {
+      rsiChartRef.current.resize(width, effectiveSubHeight);
+    }
+    if (macdChartRef.current && macdContainerRef.current) {
+      macdChartRef.current.resize(width, effectiveSubHeight);
+    }
+  }, [chartHeight, effectiveSubHeight]);
 
   // Incremental update: use update() for same-length (live-tick) changes and setData() only
   // when a new bar has appeared. This avoids a full dataset repaint on every tick.

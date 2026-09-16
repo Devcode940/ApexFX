@@ -1,5 +1,4 @@
-import { fetchWithTimeout } from '../lib/fetch';
-import { warn } from '../lib/logger';
+import { serverWatchlist } from './market';
 
 export interface CentralBankRate {
   currency: string;
@@ -29,48 +28,55 @@ export interface MacroData {
   differentials: Record<string, number>;
 }
 
-let cachedSentiment: MacroData['sentiment'] = {
-  score: 54,
-  classification: 'Neutral',
-  marketBias: 'Neutral',
-};
-let lastSentimentFetch = 0;
-const SENTIMENT_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-
-export async function fetchMacroSentiment(): Promise<MacroData['sentiment']> {
-  const now = Date.now();
-  if (now - lastSentimentFetch < SENTIMENT_CACHE_TTL) {
-    return cachedSentiment;
+/**
+ * Compute institutional FX Risk-On vs Risk-Off macro sentiment based on
+ * live performance of high-beta commodity currencies (AUD, NZD, CAD) versus
+ * traditional safe-haven anchors (JPY, CHF, USD), combined with central bank carry differentials.
+ */
+export function computeFxMacroSentiment(): MacroData['sentiment'] {
+  const quoteMap: Record<string, number> = {};
+  for (const item of serverWatchlist) {
+    quoteMap[item.symbol] = isFinite(item.change) ? item.change : 0;
   }
 
-  try {
-    const res = await fetchWithTimeout('https://api.alternative.me/fng/?limit=1', { timeoutMs: 5000 });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as any;
-    const entry = data?.data?.[0];
-    if (entry) {
-      const score = parseInt(entry.value, 10);
-      let classification = entry.value_classification as MacroData['sentiment']['classification'];
-      if (!classification) {
-        if (score <= 25) classification = 'Extreme Fear';
-        else if (score <= 45) classification = 'Fear';
-        else if (score <= 55) classification = 'Neutral';
-        else if (score <= 75) classification = 'Greed';
-        else classification = 'Extreme Greed';
-      }
+  // High-beta risk currencies
+  const audChange = quoteMap['AUDUSD'] || 0;
+  const nzdChange = quoteMap['NZDUSD'] || 0;
+  const cadChange = -(quoteMap['USDCAD'] || 0); // CAD strength is negative USDCAD
+  const riskBasket = (audChange + nzdChange + cadChange) / 3;
 
-      let marketBias: MacroData['sentiment']['marketBias'] = 'Neutral';
-      if (score < 45) marketBias = 'Risk-Off (Safe Haven)';
-      else if (score > 55) marketBias = 'Risk-On (High Yield)';
+  // Safe-haven currencies
+  const jpyChange = -(quoteMap['USDJPY'] || 0); // JPY strength is negative USDJPY
+  const chfChange = -(quoteMap['USDCHF'] || 0); // CHF strength is negative USDCHF
+  const safeHavenBasket = (jpyChange + chfChange) / 2;
 
-      cachedSentiment = { score, classification, marketBias };
-      lastSentimentFetch = now;
-    }
-  } catch (err: any) {
-    warn('[Macro] Failed to fetch external sentiment index, using baseline:', err.message);
+  // Carry yield baseline: spread between high-yield and low-yield central banks
+  const highYieldAvg = (CENTRAL_BANK_RATES.USD.rate + CENTRAL_BANK_RATES.AUD.rate + CENTRAL_BANK_RATES.NZD.rate) / 3;
+  const lowYieldAvg = (CENTRAL_BANK_RATES.JPY.rate + CENTRAL_BANK_RATES.CHF.rate) / 2;
+  const carryAdvantage = highYieldAvg - lowYieldAvg;
+
+  // Baseline score around 50; adjusted by relative flow difference
+  const rawScore = 50 + (riskBasket - safeHavenBasket) * 15 + (carryAdvantage > 3 ? 3 : 0);
+  const score = Math.max(5, Math.min(95, Math.round(rawScore)));
+
+  let classification: MacroData['sentiment']['classification'] = 'Neutral';
+  let marketBias: MacroData['sentiment']['marketBias'] = 'Neutral';
+
+  if (score >= 75) {
+    classification = 'Extreme Greed';
+    marketBias = 'Risk-On (High Yield)';
+  } else if (score >= 58) {
+    classification = 'Greed';
+    marketBias = 'Risk-On (High Yield)';
+  } else if (score <= 25) {
+    classification = 'Extreme Fear';
+    marketBias = 'Risk-Off (Safe Haven)';
+  } else if (score <= 42) {
+    classification = 'Fear';
+    marketBias = 'Risk-Off (Safe Haven)';
   }
 
-  return cachedSentiment;
+  return { score, classification, marketBias };
 }
 
 export function computeRateDifferential(symbol: string): { baseRate: number; quoteRate: number; spread: number } {
@@ -86,7 +92,7 @@ export function computeRateDifferential(symbol: string): { baseRate: number; quo
 }
 
 export async function getMacroOverview(activeSymbol = 'EURUSD'): Promise<MacroData & { activePairDifferential: ReturnType<typeof computeRateDifferential> }> {
-  const sentiment = await fetchMacroSentiment();
+  const sentiment = computeFxMacroSentiment();
 
   const differentials: Record<string, number> = {
     EURUSD: computeRateDifferential('EURUSD').spread,
