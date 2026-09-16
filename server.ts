@@ -654,12 +654,29 @@ app.post('/api/chat',
         // ignore
       }
 
+      // Inject relative strength and macro carry differentials
+      let macroContextStr = 'Neutral baseline';
+      try {
+        const { sentiment, activePairDifferential } = await getMacroOverview(safeSymbol);
+        const strengthData = calculateCurrencyStrength();
+        const baseStrength = strengthData.find((s) => s.currency === safeSymbol.slice(0, 3));
+        const quoteStrength = strengthData.find((s) => s.currency === safeSymbol.slice(3, 6));
+
+        macroContextStr = `
+- Macro Yield Spread for ${safeSymbol}: Base (${activePairDifferential.baseRate}%) vs Quote (${activePairDifferential.quoteRate}%) = Spread ${activePairDifferential.spread > 0 ? '+' : ''}${activePairDifferential.spread}%
+- Relative Currency Strength: ${baseStrength ? `${baseStrength.currency}: ${baseStrength.strength}/10 (${baseStrength.bias})` : 'N/A'} vs ${quoteStrength ? `${quoteStrength.currency}: ${quoteStrength.strength}/10 (${quoteStrength.bias})` : 'N/A'}
+- Global Market Sentiment: ${sentiment.classification} (${sentiment.score}/100), Bias: ${sentiment.marketBias}`;
+      } catch {
+        // ignore
+      }
+
       const contextStr = `
 You are the ApexFX AI Analyst (AI Co-Pilot Strategist) in a professional trading platform.
 Current active instrument: ${safeSymbol}
 Active timeframe: ${safeTimeframe}
 Latest analytical consensus signal: ${activeSignal ? JSON.stringify(activeSignal).slice(0, 2000) : 'None'}
 Upcoming ForexFactory Macro Events for this pair: ${upcomingEventsStr}
+Real-Time Macro & Confluence Context: ${macroContextStr}
 
 Provide professional, accurate, and insightful trading or analysis answers. Use clean markdown formatting. Keep answers concise, highly specific, and focused on technical/fundamental aspects of forex trading. Use the exact symbol's pip and price characteristics in your explanations. If high-impact economic news is approaching, advise appropriate volatility risk management.
 
