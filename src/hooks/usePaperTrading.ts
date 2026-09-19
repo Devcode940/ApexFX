@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createLeadingThrottle } from '../utils/throttle';
 import { TradePosition, ClosedTrade, WatchlistItem } from '../types';
 import { buildClosedTrade, markToMarket, validateOrder, makeId, MAX_LOTS, type OrderRejectionReason } from '../utils/paperTrading';
 
@@ -106,13 +107,26 @@ export function usePaperTrading(
   useEffect(() => { symbolRef.current = selectedSymbol; }, [selectedSymbol]);
 
   // --- mark to market + SL/TP execution ---
-  useEffect(() => {
-    const result = markToMarket(positions, watchlistItems);
+  // Coalesced through a leading-edge throttle: a burst of feed updates re-derives the book once, and
+  // the LAST update in the burst still gets applied (that trailing run is the whole point - a plain
+  // dropping throttle would silently leave the newest price unprocessed, which for stops is the one
+  // tick that matters). The window is anchored to the leading run so a sustained burst cannot postpone
+  // execution indefinitely.
+  // Reading through refs (not the render's arrays) is what makes deferring safe: the work always runs
+  // against the newest positions and prices, whenever it happens to fire.
+  const recompute = useCallback(() => {
+    const result = markToMarket(positionsRef.current, watchlistRef.current);
     if (!result.changed) return;
-    // Both setters are called from the effect body, each exactly once — never from inside an
-    // updater (see S3.1).
+    // Both setters called from here, each exactly once - never from inside an updater (see S3.1).
     setPositions(result.positions);
     if (result.closed.length > 0) setClosedTrades((prev) => [...result.closed, ...prev]);
+  }, []);
+  const markThrottle = useRef(createLeadingThrottle(() => recompute(), 500));
+  useEffect(() => {
+    // Captured locally on purpose: by cleanup time the ref may already point at another throttle.
+    const throttle = markThrottle.current;
+    throttle.schedule();
+    return () => throttle.cancel();
   }, [watchlistItems, positions]);
 
   const handleOpenPosition = useCallback<UsePaperTradingApi['handleOpenPosition']>(

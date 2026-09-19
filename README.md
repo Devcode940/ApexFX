@@ -49,7 +49,7 @@ ApexFX Terminal is a high-performance, next-generation **multi-confluence Forex 
 * **Frontend**: React 19, Vite 6, Tailwind CSS v4, lightweight-charts v5, Lucide Icons, Recharts, Motion animations.
 * **Backend**: Express.js on Node.js with a native WebSocket server (`ws`).
 * **APIs & Data**: Twelve Data (WebSocket ticks + REST quotes + history), Yahoo Finance REST API (fallback quotes + history), Frankfurter (ECB rates), Finnhub (news), ForexRate API, Google Gemini API / OpenRouter (AI).
-* **Quality**: TypeScript type checking (`npm run typecheck`), ESLint 9 flat config with `--max-warnings=0` (`npm run lint`), `strict: true` in `tsconfig.json`, and 107 Vitest tests (`npm test`) across the client trading math *and* the server security/limits layer. CI fails on any of them plus a prod-bundle boot smoke test, a secret scan, and a Docker healthcheck test.
+* **Quality**: TypeScript type checking (`npm run typecheck`), ESLint 9 flat config with `--max-warnings=0` (`npm run lint`), `strict: true` in `tsconfig.json`, and 113 Vitest tests (`npm test`) across the client trading math *and* the server security/limits layer. CI fails on any of them plus a prod-bundle boot smoke test, a secret scan, and a Docker healthcheck test.
 
 ---
 

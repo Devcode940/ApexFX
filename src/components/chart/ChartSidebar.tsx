@@ -17,23 +17,20 @@ import {
   Moon,
   Eye,
   EyeOff,
-  Layers,
-} from 'lucide-react';
+  Layers } from 'lucide-react';
 import type { Pattern, TechnicalIndicatorsState, Timeframe } from '../../types';
 import {
   FOREX_SESSIONS,
   ForexSessionKey,
   getSessionLocalHoursString,
-  getLocalTimezoneName,
-} from '../../utils/forexSessions';
+  getLocalTimezoneName } from '../../utils/forexSessions';
 import type {
   AnimTradeFilter,
   ChartTheme,
   DrawingsState,
   DrawingTool,
   PatternMarkerFilter,
-  SidebarTab,
-} from '../../types/chart';
+  SidebarTab } from '../../types/chart';
 import { PAIRS_CONFIG } from '../../utils/forexData';
 import { resolveHorizontalLine } from '../../utils/chart/drawingTools';
 
@@ -167,8 +164,7 @@ export const ChartSidebar: React.FC<ChartSidebarProps> = (props) => {
     isExpandedFullScreen,
     setIsExpandedFullScreen,
     onFitContent,
-    onSnapshot,
-  } = props;
+    onSnapshot } = props;
 
   const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
   const precision = config.pipDecimal + 1;

@@ -8,15 +8,13 @@ export const PAIRS_CONFIG: Record<string, { name: string; pipDecimal: number; sp
   'USDCAD': { name: 'USD / CAD', pipDecimal: 4, spreadPips: 1.8 },
   'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2, spreadPips: 2.3 },
   'XAUUSD': { name: 'Gold / USD', pipDecimal: 2, spreadPips: 2.5 },
-  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4, spreadPips: 2.0 },
-};
+  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4, spreadPips: 2.0 } };
 
 // Contract size (base units per lot) per instrument. Forex standard lot = 100,000 units;
 // Gold = 100 troy oz per lot, Silver = 5,000 troy oz per lot.
 export const CONTRACT_SIZE: Record<string, number> = {
   'XAUUSD': 100,
-  'XAGUSD': 5000,
-};
+  'XAGUSD': 5000 };
 
 export function getContractSize(symbol: string): number {
   return CONTRACT_SIZE[symbol] || 100000;
@@ -40,8 +38,7 @@ export const TIME_CONFIG: Record<Timeframe, { label: string; offsetSec: number }
   '15m': { label: '15 Minutes', offsetSec: 900 },
   '1H': { label: '1 Hour', offsetSec: 3600 },
   '4H': { label: '4 Hours', offsetSec: 14400 },
-  'D': { label: '1 Day', offsetSec: 86400 },
-};
+  'D': { label: '1 Day', offsetSec: 86400 } };
 
 // Indicator computations
 export function computeSMA(data: Candlestick[], period = 20): (number | null)[] {
@@ -247,8 +244,7 @@ export function computeFibonacci(data: Candlestick[]) {
     r236: isDowntrend ? highest - range * 0.236 : lowest + range * 0.236,
     r382: isDowntrend ? highest - range * 0.382 : lowest + range * 0.382,
     r500: isDowntrend ? highest - range * 0.500 : lowest + range * 0.500,
-    r618: isDowntrend ? highest - range * 0.618 : lowest + range * 0.618,
-  };
+    r618: isDowntrend ? highest - range * 0.618 : lowest + range * 0.618 };
 }
 
 export function computeATR(data: Candlestick[], period = 14): (number | null)[] {
@@ -391,83 +387,79 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
 
     let pat: Omit<Pattern, 'winRate' | 'reliability' | 'volumeConfirm' | 'score' | 'indicatorsConfirm'> | null = null;
 
+    // Stable ID using candle time + pattern name so markers don't shift on re-render
+    const idBase = `${c.time}_`;
+
     // 1. DOJI
     const isDoji = (body / range) < 0.12 && range > 0;
     if (isDoji) {
       pat = {
-        id: `doji_${i}`,
+        id: `${idBase}doji`,
         name: 'Doji',
         type: 'neutral',
         time: c.time,
         description: 'Indicates indecision between buyers and sellers. Watch for a reverse signal.',
-        candlestickIndex: i,
-      };
+        candlestickIndex: i };
     }
     // 2. HAMMER (Bullish Reversal - Long lower wick, small body at top, little upper wick)
     else if ((lowerWick > body * 1.8) && (upperWick < body * 0.6) && (body / range > 0.1) && (i > 10 && c.close > c.low + range * 0.6)) {
       pat = {
-        id: `hammer_${i}`,
+        id: `${idBase}hammer`,
         name: 'Hammer',
         type: 'bullish',
         time: c.time,
         description: 'Bullish reversal pattern. Price rejected low values, showing substantial buying force.',
-        candlestickIndex: i,
-      };
+        candlestickIndex: i };
     }
     // 3. SHOOTING STAR (Bearish Reversal - Long upper wick, small body at bottom, little lower wick)
     else if ((upperWick > body * 1.8) && (lowerWick < body * 0.6) && (body / range > 0.1) && (c.close < c.low + range * 0.4)) {
       pat = {
-        id: `shooting_star_${i}`,
+        id: `${idBase}shooting_star`,
         name: 'Shooting Star',
         type: 'bearish',
         time: c.time,
         description: 'Bearish reversal pattern. Sellers pushed price back down after buyers established a temporary peak.',
-        candlestickIndex: i,
-      };
+        candlestickIndex: i };
     }
     // 4. BULLISH ENGULFING (t-1 Bearish, t Bullish and body covers t-1 body fully)
     else if (p.close < p.open && isBullish && c.close > p.open && c.open < p.close) {
       pat = {
-        id: `bullish_engulf_${i}`,
+        id: `${idBase}bullish_engulf`,
         name: 'Bullish Engulfing',
         type: 'bullish',
         time: c.time,
         description: 'A powerful bullish trigger. Buyers took full control, overshadowing the previous day\'s selloff.',
-        candlestickIndex: i,
-      };
+        candlestickIndex: i };
     }
     // 5. BEARISH ENGULFING
     else if (p.close > p.open && isBearish && c.close < p.open && c.open > p.close) {
       pat = {
-        id: `bearish_engulf_${i}`,
+        id: `${idBase}bearish_engulf`,
         name: 'Bearish Engulfing',
         type: 'bearish',
         time: c.time,
         description: 'Strong selling pressure. Bears completely overwhelmed the bullish gains of the prior candle.',
-        candlestickIndex: i,
-      };
+        candlestickIndex: i };
     }
     // 6. MORNING STAR (Bullish 3-candle pattern)
     else if (pp.close < pp.open && (Math.abs(p.close - p.open) / (p.high - p.low || 1) < 0.25) && isBullish && c.close > (pp.open + pp.close) / 2) {
       pat = {
-        id: `morning_star_${i}`,
+        id: `${idBase}morning_star`,
         name: 'Morning Star',
         type: 'bullish',
         time: c.time,
         description: 'A reliable bullish three-candle morning reversal pattern showing seller exhaustion followed by buying confidence.',
-        candlestickIndex: i,
-      };
+        candlestickIndex: i };
     }
     // 7. EVENING STAR (Bearish 3-candle pattern)
     else if (pp.close > pp.open && (Math.abs(p.close - p.open) / (p.high - p.low || 1) < 0.25) && isBearish && c.close < (pp.open + pp.close) / 2) {
       pat = {
-        id: `evening_star_${i}`,
+        id: `${idBase}evening_star`,
         name: 'Evening Star',
         type: 'bearish',
         time: c.time,
         description: 'A bearish three-candle evening reversal pattern indicating that the upward trajectory has topped out.',
-        candlestickIndex: i,
-      };
+        candlestickIndex: i };
     }
 
     if (pat) {
@@ -567,8 +559,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
         reliability,
         volumeConfirm,
         score,
-        indicatorsConfirm: indicatorsConfirm.length > 0 ? indicatorsConfirm : undefined,
-      });
+        indicatorsConfirm: indicatorsConfirm.length > 0 ? indicatorsConfirm : undefined });
     }
   }
 
@@ -599,8 +590,7 @@ export function generateSignal(
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       rationale: ['Loading market data...'],
       breakdown: [],
-      disclaimer: 'Heuristic estimate — not financial advice. Pattern win rates are not backtested.',
-    };
+      disclaimer: 'Heuristic estimate — not financial advice. Pattern win rates are not backtested.' };
   }
 
   const sma = computeSMA(data, 20);
@@ -738,11 +728,19 @@ export function generateSignal(
     confidence = Math.floor(45 + Math.abs(finalScore - 50) * 2);
   }
 
-  const isJPY = symbol.includes('JPY');
-  let atrEquivalent = 0.0025;
-  if (symbol === 'XAUUSD') atrEquivalent = 8.5;
-  else if (symbol === 'XAGUSD') atrEquivalent = 0.25;
-  else if (isJPY) atrEquivalent = 0.35;
+  // TP/SL distances derived from real ATR when available, with fallback defaults.
+  const atrArr = computeATR(data, 14);
+  const latestAtr = atrArr[atrArr.length - 1];
+  let atrEquivalent: number;
+  if (latestAtr && isFinite(latestAtr) && latestAtr > 0) {
+    atrEquivalent = latestAtr;
+  } else {
+    // Fallback static values when ATR is unavailable (insufficient data)
+    if (symbol === 'XAUUSD') atrEquivalent = 8.5;
+    else if (symbol === 'XAGUSD') atrEquivalent = 0.25;
+    else if (symbol.includes('JPY')) atrEquivalent = 0.35;
+    else atrEquivalent = 0.0025;
+  }
 
   let tp = currentPrice;
   let sl = currentPrice;
@@ -765,8 +763,7 @@ export function generateSignal(
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     rationale: rationale.length > 0 ? rationale : ['Market is moving sideways near global anchors. No extreme indicator divergence is seen. Wait for breakout.'],
     breakdown,
-    disclaimer: 'Experimental heuristic — not financial advice. Pattern win rates are estimates, not backtested guarantees.',
-  };
+    disclaimer: 'Experimental heuristic — not financial advice. Pattern win rates are estimates, not backtested guarantees.' };
 }
 
 // Watchlist default creation. Prices are zeroed until the live feed delivers
@@ -781,8 +778,7 @@ export function createWatchlistFromConfig(): WatchlistItem[] {
       high: 0,
       low: 0,
       change: 0,
-      spread: config.spreadPips,
-    };
+      spread: config.spreadPips };
   });
 }
 

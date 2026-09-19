@@ -51,6 +51,10 @@ export const AiAssistant: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<TemplateCategory>('analysis');
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasInitializedContextRef = useRef(false);
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Update greeting with live context only once, without wiping history
   useEffect(() => {
@@ -83,9 +87,11 @@ export const AiAssistant: React.FC = () => {
         time: now,
       },
     ]);
-  }, [symbol, timeframe]);
+    onClearAttachedImage?.();
+  }, [symbol, timeframe, onClearAttachedImage]);
 
   const handleSendMessage = async (textToSend = inputText, imageToSend: string | null = attachedImage) => {
+    if (isTyping) return; // prevent double-send
     if (!textToSend.trim() && !imageToSend) return;
 
     const userMsgTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -96,7 +102,7 @@ export const AiAssistant: React.FC = () => {
       ...(imageToSend ? { image: imageToSend } : {}),
     };
 
-    const updatedMessages = [...messages, userMsg];
+    const updatedMessages = [...messagesRef.current, userMsg];
     setMessages(updatedMessages);
     setInputText('');
     onClearAttachedImage?.();
@@ -175,25 +181,28 @@ export const AiAssistant: React.FC = () => {
                   </div>
                 )}
                 <div className={`p-2.5 rounded-lg text-xs leading-relaxed ${isAi ? 'bg-zinc-900 text-zinc-200 rounded-tl-none' : 'bg-blue-950/40 text-blue-100 border border-blue-900/40 rounded-tr-none'}`}>
-                  {msg.text.split('\\n').map((line, lineIdx) => {
+                  {msg.text.split('\n').map((line, lineIdx) => {
                     if (line.startsWith('### ')) {
                       return <h3 key={lineIdx} className="font-bold text-emerald-400 text-xs mt-2.5 mb-1.5 uppercase font-display tracking-wider">{line.replace('### ', '')}</h3>;
                     }
                     if (line.startsWith('#### ')) {
                       return <h4 key={lineIdx} className="font-semibold text-zinc-300 text-[11px] mt-2 mb-1 uppercase font-mono tracking-wide">{line.replace('#### ', '')}</h4>;
                     }
+                    // Render inline markdown in a single pass: **bold** and `code`
+                    const parts: React.ReactNode[] = [];
+                    const tokens = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+                    tokens.forEach((tok, i) => {
+                      if (tok.startsWith('**') && tok.endsWith('**')) {
+                        parts.push(<strong key={i} className="font-bold text-white">{tok.slice(2, -2)}</strong>);
+                      } else if (tok.startsWith('`') && tok.endsWith('`')) {
+                        parts.push(<code key={i} className="bg-zinc-950 border border-zinc-800 text-emerald-400 px-1.5 py-0.5 rounded font-mono text-[10px]">{tok.slice(1, -1)}</code>);
+                      } else if (tok) {
+                        parts.push(<React.Fragment key={i}>{tok}</React.Fragment>);
+                      }
+                    });
                     return (
                       <p key={lineIdx} className={lineIdx > 0 ? 'mt-1.5' : ''}>
-                        {line.split('**').map((chunk, chunkIdx) =>
-                          chunkIdx % 2 === 1 ? <strong key={chunkIdx} className="font-bold text-white">{chunk}</strong> : chunk
-                        ).map((item) => {
-                          if (typeof item === 'string') {
-                            return item.split('`').map((subchunk, subidx) =>
-                              subidx % 2 === 1 ? <code key={subidx} className="bg-zinc-950 border border-zinc-800 text-emerald-400 px-1.5 py-0.5 rounded font-mono text-[10px]">{subchunk}</code> : subchunk
-                            );
-                          }
-                          return item;
-                        })}
+                        {parts.length > 0 ? parts : '\u00A0'}
                       </p>
                     );
                   })}
@@ -230,11 +239,11 @@ export const AiAssistant: React.FC = () => {
         <div className="grid grid-cols-2 gap-1.5 max-h-[105px] overflow-y-auto scrollbar-thin">
           {activeCategory === 'analysis' && (
             <>
-              <button onClick={() => handleSendMessage('Run a multi-indicator confluence check to find matching confirmation signals. Note that win rates are heuristic estimates.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+              <button disabled={isTyping} onClick={() => handleSendMessage('Run a multi-indicator confluence check to find matching confirmation signals. Note that win rates are heuristic estimates.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group disabled:opacity-50 disabled:cursor-not-allowed">
                 <div className="flex items-center gap-1.5 mb-1"><ShieldCheck className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">Indicator Confluence</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">Combine RSI, EMA50 & SMA20 strategy.</p>
               </button>
-              <button onClick={() => handleSendMessage('Calculate Fibonacci retracement levels from the highest peaks and lowest troughs.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+              <button disabled={isTyping} onClick={() => handleSendMessage('Calculate Fibonacci retracement levels from the highest peaks and lowest troughs.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
                 <div className="flex items-center gap-1.5 mb-1"><TrendingUp className="w-3.5 h-3.5 text-indigo-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">Fibonacci Grid</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">Extract mathematical golden-ratio supports.</p>
               </button>
@@ -242,11 +251,11 @@ export const AiAssistant: React.FC = () => {
           )}
           {activeCategory === 'trends' && (
             <>
-              <button onClick={() => handleSendMessage('Analyze current Moving Average Crossovers (SMA 20 vs EMA 50) for entry alignment.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+              <button disabled={isTyping} onClick={() => handleSendMessage('Analyze current Moving Average Crossovers (SMA 20 vs EMA 50) for entry alignment.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
                 <div className="flex items-center gap-1.5 mb-1"><Activity className="w-3.5 h-3.5 text-yellow-500 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">EMA/SMA Crossover</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">Flag Golden and Death crossovers instantly.</p>
               </button>
-              <button onClick={() => handleSendMessage('Assess market volatility via ATR (Average True Range) to gauge current trading risk levels.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+              <button disabled={isTyping} onClick={() => handleSendMessage('Assess market volatility via ATR (Average True Range) to gauge current trading risk levels.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
                 <div className="flex items-center gap-1.5 mb-1"><AlertCircle className="w-3.5 h-3.5 text-rose-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">ATR Volatility Scan</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">Audit current pip range standard volatility.</p>
               </button>
@@ -254,11 +263,11 @@ export const AiAssistant: React.FC = () => {
           )}
           {activeCategory === 'risk' && (
             <>
-              <button onClick={() => handleSendMessage('Scan for the most profitable candlestick patterns in the active history. Remind that win rates are heuristic estimates, not backtested guarantees.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+              <button disabled={isTyping} onClick={() => handleSendMessage('Scan for the most profitable candlestick patterns in the active history. Remind that win rates are heuristic estimates, not backtested guarantees.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
                 <div className="flex items-center gap-1.5 mb-1"><Award className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">High Probability Scan</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">List the scanned candlestick shapes.</p>
               </button>
-              <button onClick={() => handleSendMessage('Calculate recommended lot size and risk-reward ratio assuming a 1% risk on a $10,000 account.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+              <button disabled={isTyping} onClick={() => handleSendMessage('Calculate recommended lot size and risk-reward ratio assuming a 1% risk on a $10,000 account.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
                 <div className="flex items-center gap-1.5 mb-1"><Calculator className="w-3.5 h-3.5 text-cyan-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">1% Lot Size Calculator</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">Forex mathematics & risk control guide.</p>
               </button>
@@ -279,15 +288,15 @@ export const AiAssistant: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-1.5 font-sans">
-            <button type="button" onClick={() => handleSendMessage('Please run a full visual candle chart analysis on this snapshot.', attachedImage)} className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-mono font-bold transition-all cursor-pointer shadow">Analyze Snapshot</button>
+            <button type="button" disabled={isTyping} onClick={() => handleSendMessage('Please run a full visual candle chart analysis on this snapshot.', attachedImage)} className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-mono font-bold transition-all cursor-pointer shadow disabled:opacity-50 disabled:cursor-not-allowed">Analyze Snapshot</button>
             <button type="button" onClick={onClearAttachedImage} className="p-1 hover:bg-zinc-800 text-zinc-500 hover:text-rose-400 rounded transition-colors cursor-pointer" title="Remove snapshot">✕</button>
           </div>
         </div>
       )}
 
       <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="p-3 bg-zinc-900 border-t border-zinc-800 flex gap-2">
-        <input type="text" placeholder="Ask AI Analyst (e.g. 'RSI check', 'Support lines')..." value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-zinc-950 text-xs border border-zinc-800 focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-zinc-200" />
-        <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg px-3.5 py-2 transition-all flex items-center justify-center cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
+        <input type="text" disabled={isTyping} placeholder={isTyping ? 'AI is thinking…' : 'Ask AI Analyst (e.g. "RSI check", "Support lines")...'} value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-zinc-950 text-xs border border-zinc-800 focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed" />
+        <button type="submit" disabled={isTyping} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-3.5 py-2 transition-all flex items-center justify-center cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
       </form>
     </div>
   );
