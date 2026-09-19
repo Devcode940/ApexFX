@@ -4,7 +4,6 @@ import {
   LineChart,
   TrendingUp,
   Activity,
-  Ruler,
   MousePointer,
   Minus,
   Type,

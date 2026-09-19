@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NewsItem } from '../types';
-import { Globe, HeartHandshake, RefreshCw, AlertTriangle, Loader2 } from 'lucide-react';
+import { Globe, AlertTriangle, Loader2 } from 'lucide-react';
 
 
 import { useTrading } from '../context/TradingContext';

@@ -21,7 +21,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useClock } from '../hooks/useClock';
 import { useWatchlistFeed } from '../hooks/useWatchlistFeed';
 import { useChartHistory } from '../hooks/useChartHistory';
-import { usePaperTrading } from '../hooks/usePaperTrading';
+import { usePaperTrading, type OpenPositionResult } from '../hooks/usePaperTrading';
 
 interface TradingContextType {
   mobileTab: 'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis';
@@ -49,6 +49,8 @@ interface TradingContextType {
   handleChartSnapshot: (dataUrl: string) => void;
   onClearAttachedImage: () => void;
   wsConnected: boolean;
+  feedStatus: 'connecting' | 'live' | 'polling' | 'degraded';
+  feedSource: 'twelvedata' | 'yahoo' | null;
   positions: TradePosition[];
   setPositions: React.Dispatch<React.SetStateAction<TradePosition[]>>;
   closedTrades: ClosedTrade[];
@@ -63,11 +65,14 @@ interface TradingContextType {
   activeData: Candlestick[];
   currentPrice: number;
   activePatterns: Pattern[];
-  activeSignal: TradingSignal | null;
+  // generateSignal() always returns a signal (a NEUTRAL one while there is no data yet). The old
+  // `| null` forced defensive derefs for a state that cannot happen, while hiding the one that can:
+  // a neutral signal carries placeholder sl/tp equal to the current price.
+  activeSignal: TradingSignal;
   volatility: VolatilityDetails | null;
   priceRange: { low: number; high: number; percentage: number } | null;
 
-  handleOpenPosition: (type: 'BUY' | 'SELL', amount: number, sl?: number, tp?: number) => void;
+  handleOpenPosition: (type: 'BUY' | 'SELL', amount: number, sl?: number, tp?: number) => OpenPositionResult;
   handleClosePosition: (id: string) => void;
 
   theme: 'dark' | 'light';
@@ -130,11 +135,10 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const onClearAttachedImage = React.useCallback(() => setAiSnapshot(null), []);
 
-  const { watchlistItems, setWatchlistItems, tickStates, wsConnected } = useWatchlistFeed();
+  const { watchlistItems, setWatchlistItems, tickStates, wsConnected, feedStatus, feedSource } = useWatchlistFeed();
 
   const { chartData, setChartData, activeData } = useChartHistory(selectedSymbol, selectedTimeframe);
 
-  const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
   const [isRefreshingSignal, setIsRefreshingSignal] = useState<boolean>(false);
 
   // Clear highlighted pattern on symbol/timeframe change
@@ -142,28 +146,22 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setHighlightedPattern(null);
   }, [selectedSymbol, selectedTimeframe]);
 
-  // Live quote for active symbol (separate from watchlist feed, for HUD)
-  useEffect(() => {
-    const fetchQuote = async () => {
-      try {
-        const symbolFormat = selectedSymbol.slice(0, 3) + '/' + selectedSymbol.slice(3);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 6000);
-        const response = await fetch(`/api/market/quote?symbol=${symbolFormat}`, { signal: controller.signal });
-        clearTimeout(timeout);
-        const data = await response.json();
-        if (response.ok && data.price) setLiveQuote(data);
-        else setLiveQuote(null);
-      } catch {
-        setLiveQuote(null);
-      }
-    };
-    fetchQuote();
-    const sub = setInterval(fetchQuote, 60000);
-    return () => clearInterval(sub);
-  }, [selectedSymbol]);
-
   const activeWatchItem = useMemo(() => watchlistItems.find((item) => item.symbol === selectedSymbol), [watchlistItems, selectedSymbol]);
+
+  // The header used to run a SECOND, independent 60s poll of /api/market/quote for the active
+  // symbol. That cost the operator ~1,440 Twelve Data credits/day per open tab (each call is 1
+  // credit, uncached, per browser), and it added no information: /api/market/quote is the very same
+  // Twelve Data source the watchlist feed is built from. It now reads from the feed we already have.
+  const liveQuote = useMemo(() => {
+    if (!activeWatchItem || !(activeWatchItem.price > 0)) return null;
+    return {
+      price: activeWatchItem.price,
+      change: activeWatchItem.change,
+      source: feedSource,
+      high: activeWatchItem.high,
+      low: activeWatchItem.low,
+    };
+  }, [activeWatchItem, feedSource]);
 
   const currentPrice = useMemo(() => {
     if (activeWatchItem && activeWatchItem.price > 0) return activeWatchItem.price;
@@ -263,6 +261,8 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         handleChartSnapshot,
         onClearAttachedImage,
         wsConnected,
+        feedStatus,
+        feedSource,
         positions,
         setPositions,
         closedTrades,

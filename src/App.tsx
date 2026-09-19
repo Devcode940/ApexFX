@@ -1,18 +1,45 @@
 import React from 'react';
 import { useTrading, TradingProvider } from './context/TradingContext';
 import { Timeframe, TechnicalIndicatorsState } from './types';
-import { TradingChart } from './components/TradingChart';
+// --- Code-split heavy panes (2026-09-16) -------------------------------------------------------
+// Before this, `vite build` emitted ONE 1,334,349-byte JS chunk (385 KB gzipped) because every pane
+// — and with them recharts — sat in the entry graph, so the first paint waited on the whole terminal.
+// These three are the expensive ones: the chart, and the two panes that pull in recharts. They are not
+// needed to render the shell, the HUD, or the watchlist, and a cold Suspense boundary costs one extra
+// request only on first open of each pane.
+const TradingChart = React.lazy(() => import('./components/TradingChart').then((m) => ({ default: m.TradingChart })));
 import { Watchlist } from './components/Watchlist';
 import { SignalPanel } from './components/SignalPanel';
-import { PositionsPanel } from './components/PositionsPanel';
-import { PerformanceDashboard } from './components/PerformanceDashboard';
+const PositionsPanel = React.lazy(() => import('./components/PositionsPanel').then((m) => ({ default: m.PositionsPanel })));
+// Also lazy here (not only via PositionsPanel) because it is rendered as a top-level pane on desktop
+// and mobile; a static import at either site would drag recharts back into the entry chunk.
+const PerformanceDashboard = React.lazy(() => import('./components/PerformanceDashboard').then((m) => ({ default: m.PerformanceDashboard })));
 import { PatternPanel } from './components/PatternPanel';
 import { NewsPanel } from './components/NewsPanel';
 import { AiAssistant } from './components/AiAssistant';
 import { SupabaseSync } from './components/SupabaseSync';
-import { formatPrice, PAIRS_CONFIG } from './utils/forexData';
+import { formatPrice } from './utils/forexData';
 
-const appLogo = '/src/assets/images/app_logo_1782444134483.jpg';
+/** Keeps every split boundary honest about what it is waiting for (and gives screen readers a state). */
+const Lazy: React.FC<{ children: React.ReactNode; label: string; tall?: boolean }> = ({ children, label, tall }) => (
+  <React.Suspense
+    fallback={
+      <div
+        role="status"
+        aria-busy="true"
+        className={`w-full ${tall ? 'h-[620px]' : 'h-24'} rounded-lg border border-zinc-800 bg-zinc-950/60 flex items-center justify-center text-zinc-500 font-mono text-xs animate-pulse`}
+      >
+        {label}
+      </div>
+    }
+  >
+    {children}
+  </React.Suspense>
+);
+// Must be an import, not a '/src/...' string literal: Vite only emits/rewrites assets that are
+// imported, so the literal path survived in the production bundle and 404'd (masked by the SPA
+// fallback returning index.html with status 200 for a .jpg request).
+import appLogo from './assets/images/app_logo_1782444134483.jpg';
 import { 
   Activity, 
   Clock, 
@@ -21,6 +48,18 @@ import {
   Sun,
   Moon
 } from 'lucide-react';
+
+/**
+ * This badge used to be a binary LIVE/POLL derived from the socket alone, so a rate-limited or
+ * failing feed was indistinguishable from a healthy one (prices just stopped moving, silently).
+ * 'degraded' now says so out loud; wsConnected still drives the tooltip-free socket truth.
+ */
+const FEED_BADGE: Record<'connecting' | 'live' | 'polling' | 'degraded', { label: string; tone: string; dot: string; title: string }> = {
+  live:       { label: 'LIVE',     tone: 'text-emerald-400', dot: 'bg-emerald-400 animate-pulse', title: 'Streaming live over WebSocket' },
+  polling:    { label: 'POLL',     tone: 'text-amber-500',   dot: 'bg-amber-500',                 title: 'WebSocket unavailable - polling /api/market/prices' },
+  degraded:   { label: 'DEGRADED', tone: 'text-rose-400',    dot: 'bg-rose-500 animate-pulse',     title: 'Feed requests failing or rate limited - retrying with backoff' },
+  connecting: { label: 'CONNECT',  tone: 'text-zinc-400',    dot: 'bg-zinc-500',                   title: 'Connecting to the market feed' },
+};
 
 export default function App() {
   return (
@@ -41,12 +80,11 @@ function TradingTerminal() {
     isPending,
     startTransition,
     selectedSymbol,
-    setSelectedSymbol,
     selectedTimeframe,
     setSelectedTimeframe,
     indicators,
     handleToggleIndicator,
-    wsConnected,
+    feedStatus,
     utcTime,
     liveQuote,
     activeData,
@@ -121,13 +159,15 @@ function TradingTerminal() {
 
           <div className="space-y-0.5">
             <span className="text-[9px] text-zinc-500 uppercase block leading-none">Stream Status</span>
-            <div className={`font-bold flex items-center gap-1.5 ${
-              wsConnected ? 'text-emerald-400' : 'text-amber-500'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-500'
-              }`} />
-              <span className="font-sans text-xs uppercase tracking-tight">{wsConnected ? 'LIVE' : 'POLL'}</span>
+            <div
+              role="status"
+              aria-live="polite"
+              aria-label={`Market feed status: ${feedStatus}`}
+              title={FEED_BADGE[feedStatus].title}
+              className={`font-bold flex items-center gap-1.5 ${FEED_BADGE[feedStatus].tone}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${FEED_BADGE[feedStatus].dot}`} />
+              <span className="font-sans text-xs uppercase tracking-tight">{FEED_BADGE[feedStatus].label}</span>
             </div>
           </div>
         </div>
@@ -213,9 +253,13 @@ function TradingTerminal() {
               <>
                 <div className="h-4 w-px bg-zinc-800" />
                 <div className="text-right">
-                  <span className="text-[9px] text-zinc-500 uppercase block leading-none">Twelve Data</span>
-                  <span className={`text-xs font-bold ${(!isNaN(parseFloat(liveQuote.change)) && parseFloat(liveQuote.change) >= 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {!isNaN(parseFloat(liveQuote.price)) ? parseFloat(liveQuote.price).toFixed(PAIRS_CONFIG[selectedSymbol]?.pipDecimal + 1 || 5) : '—'}
+                  {/* Label comes from the server's actual source; it used to hardcode
+                      "Twelve Data" while the fallback feed was Yahoo. */}
+                  <span className="text-[9px] text-zinc-500 uppercase block leading-none">
+                    {liveQuote.source === 'yahoo' ? 'Yahoo Feed' : liveQuote.source === 'twelvedata' ? 'Twelve Data' : 'Upstream'}
+                  </span>
+                  <span className={`text-xs font-bold ${Number.isFinite(liveQuote.change) && liveQuote.change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {Number.isFinite(liveQuote.price) && liveQuote.price > 0 ? formatPrice(liveQuote.price, selectedSymbol) : '—'}
                   </span>
                 </div>
               </>
@@ -301,13 +345,15 @@ function TradingTerminal() {
 
           {/* Core Visual Chart pane */}
           {activeData.length > 0 ? (
-            <TradingChart
-              data={activeData}
-              symbol={selectedSymbol}
-              timeframe={selectedTimeframe}
-              patterns={activePatterns}
-              indicators={indicators}
-            />
+            <Lazy label="Loading chart…" tall>
+              <TradingChart
+                data={activeData}
+                symbol={selectedSymbol}
+                timeframe={selectedTimeframe}
+                patterns={activePatterns}
+                indicators={indicators}
+              />
+            </Lazy>
           ) : (
             <div className="w-full h-[620px] rounded-lg border border-zinc-800 bg-zinc-950 flex items-center justify-center text-zinc-500 font-mono text-xs">
               Initializing Forex charting buffer...
@@ -350,7 +396,9 @@ function TradingTerminal() {
 
           {/* Comprehensive Performance & Telemetry Dashboard */}
           <div className="w-full">
-            <PerformanceDashboard />
+            <Lazy label="Loading performance telemetry…">
+              <PerformanceDashboard />
+            </Lazy>
           </div>
 
         </section>
@@ -359,7 +407,9 @@ function TradingTerminal() {
         {rightSidebarOpen ? (
           <aside className="hidden md:flex w-80 shrink-0 border-l border-zinc-800 bg-zinc-950 p-4 flex-col gap-4 h-full overflow-y-auto">
             <SignalPanel />
-            <PositionsPanel />
+            <Lazy label="Loading positions…">
+              <PositionsPanel />
+            </Lazy>
             <SupabaseSync />
           </aside>
         ) : (
@@ -387,13 +437,17 @@ function TradingTerminal() {
 
           {mobileTab === 'trader' && (
             <div className="space-y-4">
-              <PositionsPanel />
+              <Lazy label="Loading positions…">
+                <PositionsPanel />
+              </Lazy>
               <SupabaseSync />
             </div>
           )}
 
           {mobileTab === 'performance' && (
-            <PerformanceDashboard />
+            <Lazy label="Loading performance telemetry…">
+              <PerformanceDashboard />
+            </Lazy>
           )}
 
           {mobileTab === 'analysis' && (

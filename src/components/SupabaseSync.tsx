@@ -1,9 +1,40 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
-import { Database, Cloud, CloudOff, RefreshCw, Lock, User, Check, AlertCircle, ExternalLink, ShieldCheck, Terminal } from 'lucide-react';
+import { isSupabaseConfigured, requireSupabaseClient } from '../lib/supabase.ts';
+import { Database, Cloud, CloudOff, RefreshCw, Lock, User, Check, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { TradePosition, ClosedTrade } from '../types';
+import { mergePositions, mergeTrades, positionPips, tradePips } from '../utils/supabaseSync';
 
 import { useTrading } from '../context/TradingContext';
+
+/**
+ * Upsert on the per-user composite key, falling back to the legacy global `id` key.
+ *
+ * `supabase-schema.sql` now declares PRIMARY KEY (user_id, id) so two accounts can hold the same
+ * local id. Postgres rejects an `ON CONFLICT` clause that matches no constraint (SQLSTATE 42P10),
+ * so a database that has not been migrated yet would otherwise stop syncing entirely — a schema
+ * improvement must not be able to break the running app. The fallback keeps it working and says so.
+ */
+async function upsertRows(
+  sb: SupabaseClient,
+  table: 'positions' | 'closed_trades',
+  rows: Record<string, unknown>[]
+) {
+  const first = await sb.from(table).upsert(rows, { onConflict: 'user_id,id' });
+  const msg = String(first.error?.message ?? '');
+  if (first.error && (first.error.code === '42P10' || /no unique or exclusion constraint/i.test(msg))) {
+    const legacy = await sb.from(table).upsert(rows, { onConflict: 'id' });
+    if (!legacy.error) {
+      console.warn(
+        `[ApexFX] ${table}: synced against the legacy global "id" primary key. ` +
+        `Run the migration block in supabase-schema.sql for per-user keys — until then, two accounts ` +
+        `using the same local id collide (the second upsert is blocked by RLS and reports a policy violation).`
+      );
+    }
+    return legacy;
+  }
+  return first;
+}
 
 interface SupabaseSyncProps {}
 
@@ -29,13 +60,14 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
 
   // Check current session
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    const sb = requireSupabaseClient();
+    if (!sb) return;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    sb.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => {
       setSession(session);
     });
 
@@ -50,7 +82,8 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isSupabaseConfigured) {
+    const sb = requireSupabaseClient();
+    if (!sb) {
       showMsg('Supabase API keys are not configured yet.', 'error');
       return;
     }
@@ -62,11 +95,11 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
     setLoading(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { error } = await sb.auth.signUp({ email, password });
         if (error) throw error;
         showMsg('Sign-up successful! Check your email or try logging in.', 'success');
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
         showMsg('Welcome back! Account connected successfully.', 'success');
       }
@@ -78,9 +111,14 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
   };
 
   const handleLogout = async () => {
+    const sb = requireSupabaseClient();
+    if (!sb) {
+      showMsg('Supabase API keys are not configured yet.', 'error');
+      return;
+    }
     setLoading(true);
     try {
-      await supabase.auth.signOut();
+      await sb.auth.signOut();
       showMsg('Signed out of cloud account.', 'info');
     } catch (err: any) {
       showMsg(err.message, 'error');
@@ -92,6 +130,11 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
   // Push local data to Supabase
   const handlePushSync = async () => {
     if (!session) return;
+    const sb = requireSupabaseClient();
+    if (!sb) {
+      showMsg('Supabase is not configured; cannot sync.', 'error');
+      return;
+    }
     setSyncing(true);
     try {
       const userId = session.user.id;
@@ -109,14 +152,12 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           stop_loss: pos.sl || null,
           take_profit: pos.tp || null,
           timestamp: pos.openedAt ?? Date.now(),
-          pips: 0,
+          // Was a literal 0, which made the column dead data with no error anywhere.
+          pips: positionPips(pos),
           profit: pos.pnl
         }));
 
-        const { error: posErr } = await supabase
-          .from('positions')
-          .upsert(mappedPositions, { onConflict: 'id' });
-        
+        const { error: posErr } = await upsertRows(sb, 'positions', mappedPositions);
         if (posErr) throw posErr;
       }
 
@@ -131,16 +172,15 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
           exit_price: trade.exitPrice,
           lots: trade.amount,
           profit: trade.pnl,
-          pips: Math.abs(Math.round((trade.exitPrice - trade.entryPrice) * (trade.symbol.includes('JPY') ? 100 : 10000))),
+          // Was `* (symbol.includes('JPY') ? 100 : 10000)` inline here, which is 100x wrong for
+          // gold (2-decimal instrument) and disagrees with the panel's own table for silver.
+          pips: tradePips(trade),
           open_time: trade.openedAt ?? Date.now() - 3600000,
           close_time: trade.closedAt ?? Date.now(),
           close_reason: trade.closeReason
         }));
 
-        const { error: tradeErr } = await supabase
-          .from('closed_trades')
-          .upsert(mappedTrades, { onConflict: 'id' });
-
+        const { error: tradeErr } = await upsertRows(sb, 'closed_trades', mappedTrades);
         if (tradeErr) throw tradeErr;
       }
 
@@ -156,17 +196,22 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
   // Pull data from Supabase
   const handlePullSync = async () => {
     if (!session) return;
+    const sb = requireSupabaseClient();
+    if (!sb) {
+      showMsg('Supabase is not configured; cannot sync.', 'error');
+      return;
+    }
     setSyncing(true);
     try {
       // 1. Fetch positions
-      const { data: dbPositions, error: posErr } = await supabase
+      const { data: dbPositions, error: posErr } = await sb
         .from('positions')
         .select('*');
       
       if (posErr) throw posErr;
 
       // 2. Fetch closed trades
-      const { data: dbTrades, error: tradeErr } = await supabase
+      const { data: dbTrades, error: tradeErr } = await sb
         .from('closed_trades')
         .select('*');
 
@@ -201,8 +246,18 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
         closedAt: trade.close_time || undefined
       }));
 
-      onImportSync(mappedPositions, mappedTrades);
-      showMsg('Restored data from Supabase database successfully!', 'success');
+      // Merge, never replace: a pull used to `setPositions(remoteRows)`, which silently deleted any
+      // local position or closed trade that had not been pushed yet (offline session, second device,
+      // a trade closed after the last sync).
+      const nextPositions = mergePositions(positions, mappedPositions);
+      const nextTrades = mergeTrades(closedTrades, mappedTrades);
+      onImportSync(nextPositions, nextTrades);
+      showMsg(
+        `Merged ${mappedPositions.length} position(s) and ${mappedTrades.length} trade(s) from Supabase ` +
+        `(local-only rows kept: ${nextPositions.length - mappedPositions.length} position(s), ` +
+        `${nextTrades.length - mappedTrades.length} trade(s)).`,
+        'success'
+      );
     } catch (err: any) {
       console.error("Restore error:", err);
       showMsg('Pull failed: ' + (err.message || 'Check connection'), 'error');

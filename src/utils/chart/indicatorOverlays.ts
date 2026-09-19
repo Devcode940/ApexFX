@@ -3,7 +3,6 @@ import {
   IChartApi,
   ISeriesApi,
   IPriceLine,
-  CandlestickSeries,
   LineSeries,
   HistogramSeries,
   ColorType,

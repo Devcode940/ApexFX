@@ -50,7 +50,9 @@ export interface Pattern {
   candlestickIndex: number;
   winRate?: number; // e.g., 78 for 78%
   reliability?: 'Low' | 'Medium' | 'High';
-  profitFactor?: number; // e.g., 1.85
+  // Deliberately no `profitFactor` on a detected pattern: it cannot be measured without a backtest,
+  // and an earlier version fabricated it from the win rate. Ledger-level PF (real) is in
+  // PerformanceDashboard's metrics, computed from closed trades.
   volumeConfirm?: boolean;
   score?: number; // profitability score
   indicatorsConfirm?: string[];
@@ -106,8 +108,12 @@ export interface ClosedTrade {
 }
 
 export interface LiveQuote {
-  price: string;
-  change: string;
+  price: number;
+  change: number;
+  /** Which upstream the server used, so the HUD can label itself truthfully. */
+  source?: 'twelvedata' | 'yahoo' | null;
+  high?: number;
+  low?: number;
 }
 
 export interface NewsItem {

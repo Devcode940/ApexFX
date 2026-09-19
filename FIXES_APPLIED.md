@@ -1,110 +1,170 @@
-# Fixes Applied — ApexFX Review
+# Hardening Log — what changed, and how each claim is proved
 
-All issues from REVIEW.md have been addressed.
+> **Why this file was rewritten (2026-09-13).** The previous version listed 16 "fixes" and a
+> verification section that said `tsc passes / 13 tests pass / build succeeds`. Every one of those
+> statements was literally true, and the file was still misleading: the two quality gates it claimed
+> to add were non-functional (ESLint could not start; `strict` was never enabled), the log
+> redactor it claimed to add leaked keys on the only code path that mattered, and the AI model it
+> documented had been retired upstream six weeks earlier.
+>
+> **Rule for this file now:** no claim without a command or test name that fails if the claim is
+> false. If you edit code and a row here becomes unprovable, delete the row.
 
-## P0 Critical
+Current status: **Phases 1 and 2 complete** (P0 items 1–6 of `REVIEW-2026-09-13.md`, the two quality
+gates, paper-trading correctness, and feed resilience). Phase 2's own follow-ons — TRUST_PROXY
+auto-detection, Vercel, Firebase orphans — are in flight; the rest is in the table at the bottom.
 
-### 1. Secured `/api/ws/token`
-- Added `WS_SHARED_SECRET` env var support: if set, requires `x-ws-secret` header or `?secret=` query to match.
-- In production without secret, requires Origin to be in `ALLOWED_ORIGINS`.
-- Added rate limiting (10 req/min per IP) on token issuance.
-- Added periodic cleanup of expired tokens (60s interval).
-- Updated `useWatchlistFeed` to fetch token first, fallback to polling if 403.
+## Phase 1 — claims and their proofs
 
-### 2. Fixed Dockerfile
-- Multi-stage build: builder stage does `npm ci` with devDeps and `npm run build`, production stage does `npm ci --only=production` and copies `dist` + `server` folder.
-- Added non-root user `nodejs`.
-- Added HEALTHCHECK using `/api/health`.
+| # | Claim | Proved by | Verified on 2026-09-13 |
+|---|---|---|---|
+| 1 | The AI model id is configurable and defaults to a model Google still serves | `GEMINI_MODEL` in `server.ts:368`, documented in `.env.example`; `/api/chat` returns `code:'AI_MODEL_UNAVAILABLE'` + a hint naming the model when upstream 404s | manual: `POST /api/chat` without keys → `503 {code:'AI_NOT_CONFIGURED'}` |
+| 2 | `.env` can no longer be committed | `.gitignore:3` `.env` + CI step "Verify .gitignore covers .env" + CI secret scan | `git check-ignore .env` → matched (was: unmatched) |
+| 3 | Upstream secrets cannot reach the logs | `server/lib/logger.ts` redacts **every argument** (incl. `Error.stack`); `server/lib/fetch.ts` no longer embeds the query string in thrown messages | `server/lib/logger.test.ts` (4 tests) + source-level PoC: timeout message is now `Request timed out after 300ms for host/path` |
+| 4 | The rate limiter cannot be bypassed with `X-Forwarded-For` | `sanitizeClientIp(req)` reads `req.ip` only; `TRUST_PROXY` **auto** mode trusts forwarding headers only from loopback/private peers (`TRUSTED_PROXY_RANGES`), `TRUST_PROXY=0` off, `=1` one hop | `server/lib/security.test.ts` (7 tests incl. proxy-addr truncation semantics) + live: with `TRUST_PROXY=0`, 35 forged-XFF requests → limited at 30; unit: public peer with `XFF: 9.9.9.9` → `req.ip` = socket address |
+| 5 | `/api/health` and `/api/ws/token` are rate limited | limiter registered above all routes (`server.ts:97`) | live: 40× `/api/health` → 429 from #18 (previously 40×200) |
+| 6 | `/api/ws/token` is deny-by-default in production | `server.ts:289-305`: constant-time secret compare; with no secret configured, a **matching** Origin is required (a missing `Origin` is now rejected, not accepted) | live: no-origin → `403 {error:'Origin required'}`; allowed origin → `200` + token; wrong secret → `403` |
+| 7 | Production build ships the logo | `src/App.tsx` imports the asset instead of using a `/src/...` literal | `dist/assets/app_logo_*-<hash>.jpg` exists and the bundle references the hashed name |
+| 8 | Unknown `/api/*` paths never return `index.html` | dev guard in `startServer()`; prod guard pre-existing | live: dev `GET /api/does-not-exist` → `404 application/json` |
+| 9 | Silver uses one instrument for both price and candles | single `YAHOO_SYMBOLS` map in `server/services/market.ts`, imported by `yahoo.ts` | `server/services/market.test.ts` asserts map equality across all 8 instruments + `SI=F` |
+| 10 | 4H aggregation cannot drift on data gaps | `aggregateCandlesByEpoch()` buckets on `floor(time/14400)`, not array index | `server/services/yahoo.test.ts` (4 tests, incl. the missing-hour case) |
+| 11 | ESLint actually runs | `eslint.config.mjs` (flat, ESLint 9) replaces `.eslintrc.json`; `--ext` dropped; `@eslint/js` added to devDeps | `npm run lint:eslint` → `0 errors, 0 warnings` (was: hard crash) |
+| 12 | CI cannot mask a failing gate | `.github/workflows/ci.yml` — no `\|\| echo`, no `\|\| true`; added prod-bundle smoke test, secret scan, container-boot test | config review; `npm run lint:eslint && npm test && npm run build` all exit 0 |
+| 13 | CSP does not weaken itself | `script-src 'self'` (no `unsafe-eval`/`unsafe-inline`), `connect-src` narrowed from blanket `https:` to `'self' + ws: + wss: + derived Supabase origin + CSP_CONNECT_EXTRA`; `X-Powered-By` removed; obsolete `X-XSS-Protection` dropped; HSTS `preload` dropped | live header inspection; Supabase origin auto-added when `VITE_SUPABASE_URL` is set |
+| 14 | Docker can't bake local secrets into layers | new `.dockerignore` (`.git`, `.env`, `node_modules`, docs) — and `.gitignore` no longer ignores the filename `.dockerignore`, which previously made the fix uncommittable | file present + `git check-ignore .dockerignore` → not ignored |
+| 15 | Silent upstream failures are silent no longer | news/quote/forexrate proxies now `logError(...)` and return `502` + `code` instead of swallowing to an unlogged `500` | code review; `502` semantics |
+| 16 | `npm audit --audit-level=high` is green (11 advisories incl. 3 high -> 4 moderate) | non-breaking `npm audit fix` only; **no** `--force`, so no majors | `npm audit --audit-level=high; echo $?` -> `0` |
+| 17 | The 4 remaining moderates are not reachable through this API | `app.set('query parser','simple')` — the two `qs` advisories (array-limit bypass, `isBuffer` DoS) need bracket/nested params, and no endpoint here reads anything but flat strings | live: `?symbol[a]=b` -> 400 (param never becomes an object), `?__proto__[x]=1` -> `({}).polluted === undefined` |
 
-### 3. Fetch timeouts
-- Created `server/lib/fetch.ts` with `fetchWithTimeout` (AbortController, default 8s) and `fetchJsonWithTimeout`.
-- All upstream calls (Yahoo, Twelve Data, Frankfurter, Finnhub, ForexRate, OpenRouter, Gemini) now use timeouts 6-15s.
-- Frontend `NewsPanel` and `AiAssistant` also use AbortController (7s and 50s).
+**Known open advisory:** `express@4.22.2 -> qs` and `@vitest/mocker` stay moderate. Clearing them means a major-bump migration; express 5 in particular makes this app's `app.get('*')` SPA fallback a syntax error (`/*splat`). Deferred to Phase 4 with the other dependency drift (react 19.2->19.3, eslint 9->10, motion 12->13, lucide 0.546->1.x, `@google/genai` 2.7->2.22).
 
-### 4. Rate limit memory leak
-- Created `server/lib/rateLimit.ts` with sliding window + cleanup every 5 min (unref'd).
-- Supports optional Upstash Redis distributed limiting via `UPSTASH_REDIS_REST_URL`/`TOKEN`.
-- Added `clearAllBuckets`, `getBucketStats`.
+**Re-running the live half of this table:** `npm run probe:live` boots the production server on a
+throwaway port and asserts 16 of the claims above (rate-limit isolation, per-endpoint budgets,
+`Retry-After` shape, WS-token denial, headers, degraded-feed reporting, query-parser hardening, log
+volume). It exits non-zero on the first unmet expectation. The unit suite covers the rest.
 
-## P1 High
+**Full suite at the time of writing:** `tsc --noEmit` clean · `eslint .` 0 problems · `vitest run` **32 tests / 5 files** (was 13 tests / 1 file) · `vite build` + `esbuild` clean.
 
-### 5. Split server.ts into modules
-- `server/lib/logger.ts` — safe logging with redaction
-- `server/lib/fetch.ts` — timeout wrapper
-- `server/lib/rateLimit.ts` — improved limiter
-- `server/lib/security.ts` — CORS, security headers (HSTS, CSP, X-Frame-Options, etc), symbol validation
-- `server/lib/cache.ts` — LRU cache with TTL for history (60s) and prices (4s)
-- `server/services/market.ts` — watchlist, Twelve Data quotes, Yahoo prices, cooldown logic, env validation for intervals
-- `server/services/yahoo.ts` — history fetching with query1→query2 fallback, Twelve Data history, caching
-- `server.ts` now imports these modules, reduced from 1056 to ~600 lines, still entry point for Vercel.
+## Phase 2 — trading correctness (2a) and feed resilience (2b)
 
-### 6. Distributed rate limiting
-- Upstash Redis support added (optional). Falls back to in-memory if not configured.
+| # | Claim | Proved by | Verified on 2026-09-13 |
+|---|---|---|---|
+| 18 | An order cannot be opened at price 0 (S3.2) — previously one EUR/USD lot booked at `0.00` rendered as **~+$108,000** of phantom profit | `validateOrder({price})` → `NO_PRICE`; BUY/SELL disabled with a `title` saying why; `markToMarket` treats a missing/0 price as *unknown*, so a cold feed never marks to zero and never fires stops | `src/utils/paperTrading.test.ts` (21 tests) |
+| 19 | A cleared lot-size input is rejected | `Number.isFinite` check. The old guard was `if (amount <= 0)` and `parseFloat('') → NaN` passes it, because `NaN <= 0` is `false` | test asserts the old predicate's behaviour, so the trap is documented as well as fixed |
+| 20 | A manual close records **one** trade (S3.1) | `setClosedTrades` is no longer called from inside the `setPositions` updater; React 19 + `StrictMode` double-invokes updaters, which appended every closed trade twice — inflating win rate / profit factor and duplicating Supabase rows and CSV export lines | test: one record per call; setters now run once from the handler, reading through refs (also removes stale-price reads on click) |
+| 21 | SL/TP semantics are defined and tested | `isStopLossHit`/`isTakeProfitHit` are inclusive at the level; short levels are the mirror of long levels; the fill is at the stop price, not the market price | tests for both directions + inclusive-at-level + no-op on uncarried symbols |
+| 22 | SL/TP ordering validation is direction-aware | `validateOrder` requires `sl < tp` for BUY and **`sl > tp` for SELL**. My first attempt enforced `sl < tp` unconditionally and rejected *every valid short* — caught by the test, not by reading the code | test asserts both sides |
+| 23 | Position ids don't collide | `crypto.randomUUID()` (with a fallback for non-secure contexts) replaces `Date.now()+4 random chars`, which collided on the shared Supabase primary key | test: 5,000 ids from a burst are unique |
+| 24 | Corrupt persisted rows can't poison the session | malformed `localStorage` rows are filtered on load | test |
+| 25 | The per-endpoint rate-limit budgets exist and are applied | `policyForPath` / `policyForRequest` in `server/lib/rateLimit.ts` | **live:** 55× `/api/market/prices` → 55× `200` with `X-RateLimit-Policy: prices;window=60s` (was 30-capped); 40× `/api/health` → 40× `200`; 429 carries `Retry-After: 60` + `{code:'RATE_LIMITED',scope:'quote',retryAfterSeconds:60}` |
+| 26 | …including inside `app.use('/api', …)` | `policyForRequest()` reads `originalUrl`, **not** `req.path`, which Express rewrites mount-relative | test `resolves from originalUrl, because req.path is mount-relative` — this was a **live-probe** find: the pure-function test passed while the wiring was broken and every request silently used the default bucket |
+| 27 | The client backs off instead of hammering | `useWatchlistFeed` doubles its poll interval (cap 15 s) or honours the server's `Retry-After` on 429; WS reconnect backs off 5→60 s; hidden tabs stop polling and refresh on return | code review + build/type gates (browser-side behaviour needs a manual check — see honest notes) |
+| 28 | Degradation is visible | `feedStatus: connecting\|live\|polling\|degraded` drives the header badge; `/api/health` returns `status:'degraded'` with `feed:{source,priced,yahooFailureStreak}` | live: health body while upstream unreachable → `{"status":"degraded",...,"feed":{"source":"yahoo","priced":0,"yahooFailureStreak":2}}` |
+| 29 | No log flood during an upstream outage | first failure logged in full, then sampled every 12th symbol error; feed scheduler logs the transition only | live: 32 log lines over ~10 s of guaranteed-failure upstream (was 8 stack traces per 5 s cycle, forever) |
+| 30 | Yahoo cycles cannot overlap | single in-flight guard + self-rescheduling `setTimeout` replaced `setInterval(..., 5000)`, which kept starting new cycles on top of hanging ones | code review; serialised by `feedInFlight` |
+| 31 | `/api/market/quote` no longer multiplies credits per tab | 15 s shared server-side cache + 10/min budget; the redundant per-tab 60 s poll in `TradingContext` is **deleted**, and the HUD chip reads the feed it was already fed, labelled with the server's real source | grep: no `setInterval` on `/api/market/quote`; `prices` payload carries `source`; README credit math rewritten to match |
+| 35 | The four AI-Studio/Firebase orphans are gone | `firebase-applet-config.json`, `firebase-blueprint.json`, `firestore.rules`, `metadata.json` deleted (S1.2); the app talks to Supabase, never Firestore, and nothing imported them | `grep -rn "firebase\|firestore" src server *.json` → no code references; stale `.dockerignore` entry removed in the same commit |
+| 42 | The pattern panel no longer shows a fabricated profit factor | `forexData.ts` produced `profitFactor = 1.1 + (winRate - 45) * 0.025` and `PatternPanel` rendered it as `1.10x` — two decimals, next to a *measured-looking* win rate, while the same product computes a **real** profit factor from the closed-trade ledger in `PerformanceDashboard`. A monotone re-labelling of a number already displayed beside it, presented as evidence. Column, field and type removed | `grep -rn "profitFactor" src` returns only the ledger computation and the two comments explaining the absence; `tsc` proves no consumer remains |
+| 43 | Responses are compressed | `compression` mounted at module scope before every route (registration order is what silently disabled the limiter before), 1 KB threshold, skips already-encoded bodies, `Vary: Accept-Encoding` | live: `npm run probe:live` compression block — `assets/index-*.js 525,605 B -> 148,756 B` (-72%), plain 200 for clients that send no `Accept-Encoding`, `/api/health` deliberately uncompressed |
+| 44 | Heavy panes are code-split | `React.lazy` for TradingChart, PositionsPanel, PerformanceDashboard (only three `lazy(` in the entry, static imports of those three removed), each behind a labelled Suspense skeleton with `role="status"` | `npx vite build`: entry chunk **1,334 kB -> 526 kB** raw / **385 kB -> 149 kB** gzip (-61%); async chunks TradingChart 395 kB, PerformanceDashboard 386 kB (recharts marker found in that one chunk only, so nothing is duplicated), PositionsPanel 25 kB |
+| 45 | Chart snapshot copies the image, and admits when it can't | `document.execCommand('copy')` on a textarea holding a PNG **data URL** is replaced by `copySnapshot()` (image via `ClipboardItem` when available, labelled text fallback, `denied`/`unsupported` outcomes) plus a 4 s `role="status"` note; the dead `apexfx:snapshot` CustomEvent (0 listeners) removed | `src/utils/clipboard.test.ts` — 8 tests over the injected-policy branches (image preferred, each fallback taken, nothing thrown, 4 distinct messages); browser clipboard itself is review-verified only, see honest notes |
+| 38 | Synced pips are real numbers, derived from one source of truth | `src/utils/pips.ts` + `src/utils/supabaseSync.ts`: `positions.pips` (was a literal `0` — dead data that never errored) is now the signed entry→live move; `closed_trades.pips` (was an inline `includes('JPY') ? 100 : 10000`) is derived from `PAIRS_CONFIG.pipDecimal`, so **gold no longer records 100× too many pips** | `src/utils/pips.test.ts` (13 tests) + `supabaseSync.test.ts` (11 tests), incl. an explicit assertion that a $2.50 gold move is 250 pips and *not* 25,000 |
+| 39 | Pulling from Supabase no longer deletes unsynced local rows | `mergePositions`/`mergeTrades` union by `id` (remote values win) instead of `setPositions(remoteRows)`; ordering contract for the journal preserved (newest close first, `closedAt`-less legacy rows sort last instead of NaN) | `supabaseSync.test.ts`: local-only row survives a pull, shared id is not duplicated, remote values win, ordering asserted |
+| 40 | Per-user database keys, with a migration that old databases survive | `supabase-schema.sql`: `PRIMARY KEY (user_id, id)` on `drawings`/`positions`/`closed_trades` + `user_id NOT NULL` + two covering indexes + an idempotent migration block (catalog check, not exception-name matching) + a `UPDATE … CASE` backfill that recomputes the mis-scaled pips. Client upserts `onConflict: 'user_id,id'` and **falls back to `'id'` on SQLSTATE 42P10** with a console warning, so an un-migrated database keeps working | `tsc`/`eslint` clean; structural check of every `CREATE TABLE` block (balanced parens, comma-separated columns). **Not executed** — no Postgres in this sandbox, see honest notes |
+| 41 | Pip *value* stopped being a hand-typed table (this one changes a risk number) | `pipValueUsd(symbol, lots, {usdPerQuote})` = `pipSize × contractSize × lots ÷ USD→quote rate`, with the rate taken from the pair itself for `USD/XXX` and from the feed's `USDJPY` for crosses. The old table said $10.00 for a **USD/CAD** pip (that is 10 CAD ≈ $7.30) and $5.00 for silver while counting silver pips at 0.0001 (a $0.50 pip) | tests pin $10 majors, $1.00 gold, $0.50 silver, $6.45 JPY at 155, and $7.30 CAD at 1.37; the risk calculator's `suggestedLotSize` consumes exactly this value |
+| 36 | `strict: true` is on and the codebase compiles under it | 25 errors fixed, none papered over: `server.ts` implicit-`any` middleware params typed; the chat `contents` pipeline given a real `ChatContent[]` type with a type-predicate filter (that is what removed the two possible-null derefs *and* the `ContentListUnion` mismatch); `ai!` replaced by an `else if (ai)` branch returning a 503 rather than an assertion; `requireSupabaseClient()` added so the 9 `supabase` derefs narrow on the value instead of pairing a boolean flag with a nullable object; `activeSignal`'s `| null` removed because `generateSignal` is declared to always return a signal, and the *reachable* problem it was hiding got fixed instead (see next row) | `tsc --noEmit` clean; negative control: a file doing `const m: {a:number}\|null = null; m.a` and an implicit-any param now produces TS18047 + TS7006 (deleted after confirming); `npm run build` and `npm run probe:live` (23 assertions) still pass |
+| 37 | A NEUTRAL signal can no longer inject placeholder SL/TP | `generateSignal` returns `sl/tp = currentPrice` while the chart is empty, and `currentPrice` itself falls back to `1.0` — so the panel's "inherit from signal" path would book a stop exactly on the entry (or $1.00 for EUR/USD). `usableLevels` excludes NEUTRAL, matching the check the auto-fill button already had | `validateOrder` rejects `sl === tp` (BUY `sl >= tp`) so the old path died with a confusing message; now those levels are simply not offered, and the button explains why via `title` |
+| 34 | Vercel deployment is real, not decorative | `vercel.json` rewritten to `framework`/`functions`/`rewrites`/`headers` (legacy `builds`+`routes` made `api/index.ts` unreachable); `api/index.ts` normalises `req.url` for all three rewrite shapes; `vite` is now imported dynamically inside `startServer()` so it is not dragged into the function bundle; `buildCommand` is `vite build` so `dist/server.cjs` is not published as a static asset; unknown `/api/*` JSON 404 hoisted to module scope (it lived only in `startServer()`, which Vercel skips) | `server/lib/vercel.test.ts` (6 tests) boots the actual handler over `http.createServer` and asserts `/api/health` 200 + unknown-api JSON 404 through each url shape; `JSON.parse(vercel.json)` has no `builds`/`routes`/`version`; `npm run build` + `node dist/server.cjs` → health 200, unknown api JSON, `/` 200; dev mode → unknown api JSON 404 and `/src/main.tsx` 200 |
+| 33 | `TRUST_PROXY` auto-detects private/loopback proxy peers instead of requiring opt-in | `createTrustProxySetting()` returns proxy-addr **range names** — a `trust proxy` *predicate* is called as `trust(ip, index)` in Express 4, so a `req.socket`-inspecting function silently trusts nothing | `security.test.ts`: auto mode is the range list; `TRUST_PROXY=0` ignores XFF; `=1` honours it; loopback peer + XFF → `req.ip = 9.9.9.9`. Public-peer truncation verified directly against proxy-addr (`XFF: 9.9.9.9` from 203.0.113.5 → `req.ip = 203.0.113.5`) |
+| 32 | Unconfigured upstream is 503, not 500 | `/api/market/quote` returns `503 {code:'NO_UPSTREAM'}` when the key is absent (upstream *failure* stays `502`) | live probe returned `429/503` bodies as documented |
 
-### 7. History caching
-- `historyCache` 60s TTL, `priceCache` 4-30s TTL for Frankfurter and watchlist.
-- Prevents hammering Yahoo on timeframe switches.
+**Full suite at the time of writing:** `tsc --noEmit` clean **with `strict: true`** · `eslint . --max-warnings=0` clean · `vitest run` **107 tests / 11 files** (was 13 tests / 1 file before this review) · `vite build` + `esbuild` clean · `npm run probe:live` 28/28.
 
-### 8. Split TradingContext god object
-- Created hooks:
-  - `useTheme.ts` — theme with system preference detection
-  - `useClock.ts` — UTC clock
-  - `useWatchlistFeed.ts` — WS + polling, tick flashes, initial rates, token handling
-  - `useChartHistory.ts` — lazy history loading per symbol/timeframe
-  - `usePaperTrading.ts` — positions/closedTrades with debounced localStorage sync (300ms) and throttled PnL
-- `TradingContext.tsx` now composes these hooks, keeps same public API but implementation is modular.
-- Added guard to avoid replacing chartData when price unchanged (prevents chart teardown).
+## The Firebase key: what deleting the files does *not* do
 
-### 9. AiAssistant history wipe fix
-- Greeting initialized only once on mount via lazy state.
-- Context update only once via ref guard, doesn't wipe history if user already chatted.
-- Added "New Chat" button (RotateCcw) to explicitly reset.
-- Added disclaimer about heuristic win rates.
+`firebase-applet-config.json` carried `apiKey: AIzaSyA1NPi3WA6LF8CioIm6wRWn7nhBW89Um8k` for project
+`abiding-operand-465801-a1`. The files are now deleted from the tree, **but the key is still reachable in
+`origin/main`'s history** (`git log --all -S "AIzaSyA1NPi3WA6LF8CioIm6wRWn7nhBW89Um8k"` → 2 commits), and the
+repo is public. Deleting a file is not revoking a secret: **rotate or restrict that key in the Google Cloud
+console** (API keys are restricted by referrer/API, so at minimum lock it to the deleted app's origins and
+disable the Firebase App Check-adjacent APIs it enables). I deliberately did not rewrite history — a force-push
+over `main` in a public repo trades a leak for a broken clone for everyone else, and it is your call, not mine.
 
-### 10. ESLint + CI
-- Added `eslint`, `@typescript-eslint`, `react-hooks` to devDeps.
-- Added `.eslintrc.json`.
-- Added `.github/workflows/ci.yml` (typecheck, test, build, docker build).
-- Updated `package.json` scripts: `lint:eslint`, `typecheck`.
+Also noted rather than hidden: `metadata.json` was the AI-Studio applet manifest declaring
+`MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API`. If you deploy this through Google AI Studio applets, that file is
+how the platform knows to inject a server-side key, so removing it may change how that specific deploy path
+provisions `GEMINI_API_KEY`. Restore it with `git checkout 6ce497e -- metadata.json` if you use that path (and
+say so, and I'll move it somewhere non-deployable instead).
 
-## P2 Nice to have
+- **`strict: true` changed two public types, on purpose.** `activeSignal` is no longer `TradingSignal | null` and `OrderRejection`/`OpenPositionResult` became discriminated unions. Both are *narrower*, so existing code keeps compiling — but if you ever make `generateSignal` able to return null, this will not warn you: the safety comes from its declared return type, not from the context field. The alternative (keep `| null` and guard in 8 places) was rejected because the guards would have been dead code that reads like a real state.
+- **Strict mode also invalidated a workaround of mine, and I removed it.** `OpenPositionResult` was a flat `{ ok: boolean; reason? }` interface purely because `strictNullChecks: false` cannot narrow a union; that limitation is now gone, so the honest union is back and `result.reason` needs no `&&` dance. Its old comment literally said "revisit alongside the strict-mode phase" — that note is deleted, since a stale workaround comment is worse than none.
+- **`supabase.auth` derefs are now guarded per-handler (5 guards), including two paths that had none.** `handleLogout`/`handlePushSync`/`handlePullSync` relied on "a session implies a client", which is true only transitively and unverifiable by the compiler. Behaviour is unchanged when configured; when it isn't, you get the "not configured" message instead of a TypeError.
 
-### 11. Chart live update optimization
-- `useChartCore` refactored: main chart creation only on symbol/timeframe/theme/height/indicator changes, NOT on drawings.
-- Separate effects for `data` (setData) and markers/drawings (priceLines) without full teardown.
-- Uses refs for drawings, sessionBlocks, trades to avoid dep churn.
-- Fixed `syncTimeScales` feedback loop risk by cleaning up properly.
+- **Row 41 changes position sizing, and it is the one change here you should eyeball before trusting it.** `suggestedLotSize = risk / (pips × pipValue)`, so correcting silver's pip value from $5.00 to $0.50 (per the repo's own `pipDecimal: 4` convention) makes suggested silver lots **10× larger**, and correcting USD/CAD from $10.00 to ~$7.30 makes CAD lots ~37% larger. Both are the arithmetic consequence of the pip *counting* the panel already used — the old table was simply inconsistent with it. If your convention is instead "silver pip = 0.001", the single fix is `XAGUSD.pipDecimal = 3` in `forexData.ts`, and pips, pip value, display precision and the SQL backfill's CASE all follow that one line.
+- **The migration SQL is reviewed, not executed.** There is no Postgres in this sandbox, so I verified structure (balanced parens, column commas, idempotent `IF NOT EXISTS` / catalog guards) rather than behaviour. Two things to check on your database before running it: it sets `user_id NOT NULL` (safe if every row came through RLS, since `auth.uid() = user_id` rejects NULL; a service-role import could break it), and the pips backfill `UPDATE` rewrites every closed trade — take a snapshot first if you care about the current values.
+- **`drawings` is an orphan table.** Nothing in `src/` writes to it (the sidebar "Drawings" tab is local state). I converted its key anyway for consistency instead of dropping it, because dropping a table in a user's project is not mine to do. Say the word and it becomes a documented `DROP TABLE`.
+- **Sync is additive merge, not replication.** Deleted-remotely rows return on the next pull, because the schema has no tombstone/version column to reason about. Fixing that properly means a `updated_at`/`deleted_at` column and a real conflict policy — worth a phase of its own if sync becomes load-bearing for you.
+- **`pipValueUsd` returns a quote-currency number when there is no rate** (e.g. USD/JPY at 1000 rather than 6.45) instead of inventing a USD figure. Reachable only with a cold feed, where orders are disabled anyway — but it is a deliberate "no silent plausible-wrong-number" choice, so it is written down.
 
-### 12. Memoized drawings
-- Drawings synced via dedicated effect that removes/creates priceLines without recreating chart.
+- **Rows 42 and 45 change what the UI shows, on purpose.** The profit-factor column is gone rather than
+  relabelled: the number carried no information its neighbour didn't. The snapshot button now sometimes says
+  "Clipboard rejected the image; copied the PNG data URL as text instead" where it used to say nothing at all —
+  that message is the fix, not a regression, but it will look like a new complaint.
+- **Row 44 moves bytes, it does not delete them.** A user who opens the chart and the dashboard still downloads
+  roughly the same total; what changes is first paint waiting on 149 kB instead of 385 kB, and that editing app
+  code no longer invalidates the hash of the recharts/lightweight-charts chunks (better repeat-visit caching).
+  I deliberately did not add `manualChunks`: the build proves each vendor library currently lands in exactly one
+  chunk, so the only remaining gain would be cosmetic, and hand-written chunk functions tend to fight Vite's own
+  heuristics as the graph changes.
+- **The clipboard path is unit-tested, not browser-tested.** This sandbox has no browser, so `ClipboardItem`
+  support, the secure-context requirement and Safari's gesture rules are covered by injected fakes and review.
+  The 1 KB compression threshold and 4 s note lifetime are my picks, not measurements.
+- **`compression` in front of `/api/ws/token`**: no BREACH exposure today (the token is random, single-use and
+  never echoed back), but the reasoning is written next to the middleware so a future route that reflects user
+  text beside a secret gets caught in review rather than in an incident.
 
-### 13. Health endpoint
-- Added `/api/health` returning status, uptime, watchlist size, wsClients, env.
+## Honest notes on the fixes above
 
-### 14. Security headers
-- Added via `securityHeadersMiddleware`: HSTS in prod, CSP, Referrer-Policy, Permissions-Policy, X-Content-Type-Options, etc.
+These are tradeoffs I chose deliberately; each one can bite, so they're written down.
 
-### 15. Heuristic disclaimer
-- Added to `generateSignal` return (`disclaimer` field) and UI footer in SignalPanel, PatternPanel, AiAssistant templates.
-- Pattern win rates now labeled "Est. Win Rate" and disclaimer in footer.
+- **`TRUST_PROXY` now auto-detects** (your call on 2026-09-13, overriding my opt-in-only default). Behind a proxy on a public address it is still off-by-default and you must set `TRUST_PROXY=1`; the residual hole is flat container networks, where a co-tenant is "private" and therefore trusted. `TRUST_PROXY=0` closes it. Two implementation notes: (a) my first attempt used a `trust proxy` **predicate** — Express 4 calls that as `trust(ip, index)`, not `trust(req)`, so it silently trusted nothing and looked correct in review; the range list is the working shape. (b) I first wrote a hand-rolled `isPrivateAddress` (string-prefix CIDR matching) to decide when to warn about an ignored header, then deleted it: duplicating subnet math next to proxy-addr's (real ipaddr.js) is a drift hazard for a log line. `isIgnoredForwardedHeader` now compares outcomes instead — if `req.ip` still equals the socket peer while a forwarding header was sent, the header was ignored, whatever mode produced that.
+- **CSP `connect-src` no longer allows all of `https:`.** This closes a real exfiltration hole, but it *would have broken Supabase sync* — the Supabase client is instantiated in the browser (`src/lib/supabase.ts`) and talks to `*.supabase.co` directly, never through our server. Fixed by deriving the origin from `VITE_SUPABASE_URL` server-side, plus `CSP_CONNECT_EXTRA`. Caveat: the server must be able to read `VITE_SUPABASE_URL` (same `.env`/env as the build) or you must set `CSP_CONNECT_EXTRA` yourself. A frontend-only env var in a statically-hosted deploy is invisible to the server.
+- **WS token expiry shortened 5 min → 2 min.** Longer-lived sockets are unaffected (the token is only checked at handshake), but a client that reconnects often will hit the token endpoint more often. Combined with the *existing* 5s reconnect loop this raises the chance of self-inflicted `429`s on `/api/ws/token` (10/min). Real fix is backoff-on-429, which is **Phase 2**, not this one.
+- **`fetchWithTimeout` now throws `UpstreamError` with `host+path` only.** Better for logs, but you lose the exact query string when debugging an upstream rejection. Use `LOG_LEVEL=info` + the `label` option to re-add safe context rather than re-adding secrets.
+- **`redact()` deliberately does not treat a bare `key=` as a secret.** It did initially, and it mangled ordinary diagnostics like `cache key=history:EURUSD:1H`. None of our four upstreams use `key=`; if you add one that does, extend `SECRET_PATTERNS` rather than loosening this globally.
+- **The 3 lint findings I fixed changed behaviour** (`TradingChart` snapshot callback deps, `useChartCore` cleanup now uses a captured ref object). Both were flagged by the newly-working `react-hooks` rules; they are correct-by-construction rather than verified by test — the chart has no test harness. Worth a manual click-through of snapshot + drawing deletion before you rely on it.
+- **Unused imports/destructured values removed in 13 files** (46 warnings). `PerformanceDashboard` had `handleOpenPosition`/`handleClosePosition`/`selectedSymbol` destructured and unused, and `BarChart`/`Bar`/`Cell` imported and unused — that usually means a feature was intended and never wired. I deleted the dead code rather than guessing at the intent; **check whether the dashboard was supposed to open positions directly.**
+- **Phase 2b's client behaviour is not test-covered.** `useWatchlistFeed`'s backoff, hidden-tab pause and
+  `Retry-After` handling are verified by type/lint gates and code review only — jsdom timers plus a fake
+  server would be needed for a real test, and I did not write one. Treat "degrades gracefully" as design,
+  not proof. The server half of the same claim (budgets, `Retry-After`, backoff, log volume) *is* verified live.
+- **The HUD chip is now a view of the same feed, by design.** Removing the per-tab poll made the "Twelve Data /
+  Yahoo Feed" chip redundant with "Internal Bid" — it can no longer disagree with it. It is kept because it labels
+  which upstream the server is using, but **if you want a genuine cross-source check, that is a product decision**:
+  it needs a second provider (e.g. quote vs. mid from a different feed) rather than a second poll of the same one.
+- **Removing an empty-interface prop (`PositionsPanelProps`) and dead imports is mechanical, but it is where I
+  broke things twice** — a `replace()` with no assertion silently missed, and a deleted declaration left a dangling
+  generic (`TS2304`). Every Phase-2 edit is therefore followed by a full `tsc` + `eslint` + `vitest` + `build` run,
+  and the anchors in the patch scripts are asserted.
 
-### 16. PerformanceDashboard robustness
-- Fixed `closedAt` fallback to `openedAt` for legacy localStorage data.
-- Equity curve sort now uses `closedAt ?? openedAt`.
+- **`npm run lint` semantics changed** to mean ESLint (it previously ran `tsc --noEmit`). `npm run typecheck` is the type gate. If you have muscle memory or scripts calling `npm run lint` expecting tsc, they now get ESLint instead.
 
-### Additional improvements
-- `getQuoteSyncMs`/`getPollMs` now validate min/max bounds (10s-1h and 5s-2m).
-- `PORT` parsing validates range.
-- Symbol validation adds length limit (max 20 chars).
-- `express.json` limit set to 1mb.
-- Vite production serving now ignores `/api/*` for 404 instead of serving index.html.
-- `.env.example` updated with `WS_SHARED_SECRET`, `UPSTASH_*`.
-- `DEPLOYMENT.md` updated with new env vars, health check, docker-compose example, multi-stage Dockerfile.
-- `forexData.ts` now returns structured `breakdown` array for sentiment, avoiding brittle string parsing.
-- `SignalPanel` now uses structured breakdown if available, with legacy fallback.
+## Known-bad, deliberately deferred (do not re-declare these as fixed)
 
-## Verification
-- `tsc --noEmit` passes
-- `vitest run` 13 tests pass
-- `npm run build` succeeds (vite + esbuild)
-- `/api/health` returns ok when server runs
+Measured 2026-09-16 with the repo's own tooling; the "was" column exists because two of these numbers came
+from my own earlier hand-counts, which were wrong in the misleading direction.
+
+| Finding | Evidence / status | Phase |
+|---|---|---|
+| ~~`profitFactor` is a linear transform of `winRate`~~ | **DONE** (row 42): deleted rather than relabelled | — |
+| ~~1.33 MB single chunk, no `compression`~~ | **DONE** (rows 43-44): entry 1,334 kB -> 526 kB raw / 385 -> 149 kB gzip; asset -72% on the wire | — |
+| ~~`execCommand('copy')` + listenerless `apexfx:snapshot`~~ | **DONE** (row 45) | — |
+| A11y interaction and labelling gaps | `eslint-plugin-jsx-a11y` recommended over `src/**/*.tsx` = **11 problems in 4 files** (App.tsx 4, chart/SubChartPanels.tsx 4, chart/ChartSidebar.tsx 2, PositionsPanel.tsx 1): 5 `click-events-have-key-events`, 3 `no-static-element-interactions`, 2 `no-noninteractive-element-interactions`, 1 `label-has-associated-control`. My earlier "99 buttons / 0 aria-label" was a raw count, not a deficiency count - 99 is buttons that mostly have visible text, and there is 1 aria-label. Still real and lint-invisible: 0 `prefers-reduced-motion` rules, 0 `tabIndex` on the drawing tools | 3 |
+| No favicon at all | `index.html` has 0 `rel="icon"` links and `public/` was never tracked in this repo (my earlier Phase-1 copy was untracked, so it did not survive the sandbox resets). `/favicon.ico` 404s, and in production the SPA fallback answers it with index.html bytes | 3 |
+| 338 kB logo JPEG rendered in a 36x36 box | `src/assets/images/app_logo_1782444134483.jpg` is 338,324 bytes, used as `w-9 h-9 object-cover` in the header, imported into `App.tsx` so it is on the first-load path. Bigger than the entire gzipped entry chunk. ImageMagick (`convert`) is available, so a 72-144 px derivative is a 2-minute change worth ~330 kB | 4 |
+| `broadcastPrices()` runs per tick | still open, unchanged from the audit | 4 |
+| `probe:live` is not CI-portable | it asserts `status == degraded`, which is only true because this sandbox blocks egress; on a runner with internet Yahoo may resolve and the assertion flips. Fix: force the failure deterministically (e.g. boot with a poisoned upstream proxy) instead of softening the assertion | 4 |
+| Express 5 / vite 8 / TS 7 / react-hooks 7 / lucide majors | express 4->5 alone requires `app.get('*')` -> `'/*splat'` in the prod static fallback | 4 |
+| Supabase migration executed | SQL is structurally checked only; it sets `user_id NOT NULL` and rewrites `closed_trades.pips`. Needs a scratch project run by you | 3 |
+| Committed Firebase key rotation | manual, only you can do it; the file deletions do not revoke it | — |
+| `drawings` table has no writer in `src/` | left in place; `DROP TABLE` is your call | 3 |

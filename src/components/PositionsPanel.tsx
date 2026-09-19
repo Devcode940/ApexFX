@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { TradePosition, TradingSignal, ClosedTrade } from '../types';
-import { DollarSign, Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, History, Calculator, ChevronDown, ChevronUp, Download, FileSpreadsheet } from 'lucide-react';
+import { Trash2, TrendingUp, TrendingDown, ClipboardList, ShoppingCart, PlusCircle, AlertCircle, History, Calculator, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { formatPrice } from '../utils/forexData';
+import { MAX_LOTS, ORDER_REJECTION_TEXT, validateOrder } from '../utils/paperTrading';
+import { levelToPips, pipValueUsd, priceOf, usdJpyFrom, usdPerQuoteRate } from '../utils/pips';
 
 import { useTrading } from '../context/TradingContext';
 
-import { PerformanceDashboard, formatDuration } from './PerformanceDashboard';
+import { PerformanceDashboard } from './PerformanceDashboard';
 
-interface PositionsPanelProps {}
-
-export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
+export const PositionsPanel: React.FC = () => {
   const {
     positions,
     closedTrades,
@@ -20,6 +19,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
     activeSignal,
     handleOpenPosition: onOpenPosition,
     handleClosePosition: onClosePosition,
+    watchlistItems,
   } = useTrading();
   const [activeTab, setActiveTab] = useState<'positions' | 'history' | 'analytics'>('positions');
   const [amount, setAmount] = useState<number>(0.1); // lot size
@@ -75,28 +75,35 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
     localStorage.setItem('forexinsight_calc_manual_sl_pips', manualSlPips.toString());
   }, [manualSlPips]);
 
-  const getPipMultiplier = (symbol: string) => {
-    if (symbol.includes('JPY')) return 100;
-    if (symbol.includes('XAG')) return 10000;
-    if (symbol.includes('XAU')) return 100;
-    return 10000;
-  };
+  // Pip size and pip value now come from utils/pips, which derives both from PAIRS_CONFIG +
+  // CONTRACT_SIZE. They used to be two hand-written tables in this file (a multiplier of
+  // 100/10000 and a per-lot value of 1.0/5.0/6.5/10.0) which disagreed with each other for silver:
+  // pips were counted at 0.0001 while a pip was valued at $5 (the 0.001-pip convention), so the
+  // risk sizing below under-sized XAG positions by 10x. Changing the convention in ONE place
+  // (PAIRS_CONFIG.pipDecimal) now changes both consistently.
+  const usdJpy = usdJpyFrom(watchlistItems);
+  const usdPerQuote = usdPerQuoteRate(selectedSymbol, priceOf(selectedSymbol, watchlistItems), usdJpy);
 
-  const getPipValueStandardLot = (symbol: string) => {
-    if (symbol.includes('XAU')) return 1.0;
-    if (symbol.includes('XAG')) return 5.0;
-    if (symbol.includes('JPY')) return 6.5;
-    return 10.0;
-  };
+  /**
+   * Levels to inherit from the signal when the operator left the inputs empty.
+   *
+   * A NEUTRAL signal is not "a signal with no direction", it is the placeholder the scanner returns
+   * while there is no data: generateSignal() sets sl/tp to `currentPrice`, which for an empty chart is
+   * `data[data.length - 1]?.close || 1.0` — i.e. 1.0 for EUR/USD. Inheriting those produced two bad
+   * states: a position whose exits sit exactly on the entry (which the validator now rejects, so the
+   * order died with a confusing message), and — before that — one that silently could never trigger.
+   * The panel already refused to *auto-fill* a NEUTRAL signal; the fallback path just never got the memo.
+   */
+  const usableLevels = activeSignal && activeSignal.type !== 'NEUTRAL';
+  const suggestedSl = usableLevels && activeSignal.sl > 0 ? activeSignal.sl : undefined;
+  const suggestedTp = usableLevels && activeSignal.tp > 0 ? activeSignal.tp : undefined;
 
   const getActiveSlPips = () => {
     if (useSltp) {
       const slParsed = parseFloat(customSl);
-      const activeSl = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal.sl;
+      const activeSl = !isNaN(slParsed) && slParsed > 0 ? slParsed : (suggestedSl ?? 0);
       if (activeSl > 0) {
-        const multiplier = getPipMultiplier(selectedSymbol);
-        const diff = Math.abs(currentPrice - activeSl);
-        const calculatedPips = Math.round(diff * multiplier);
+        const calculatedPips = levelToPips(selectedSymbol, currentPrice, activeSl);
         if (calculatedPips > 0) {
           return { pips: calculatedPips, isAuto: true };
         }
@@ -107,7 +114,8 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
 
   const activeSlInfo = getActiveSlPips();
   const riskAmount = (balance * riskPercent) / 100;
-  const pipValue = getPipValueStandardLot(selectedSymbol);
+  // Live USD/JPY when the feed has it (falls back to the quote-currency amount, see utils/pips).
+  const pipValue = pipValueUsd(selectedSymbol, 1, { usdPerQuote });
   const suggestedLotSizeRaw = activeSlInfo.pips > 0 ? (riskAmount / (activeSlInfo.pips * pipValue)) : 0.1;
   const suggestedLotSize = parseFloat(Math.max(0.01, Math.min(100.0, suggestedLotSizeRaw)).toFixed(2));
 
@@ -137,13 +145,29 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
   }, [positions]);
 
   const isJPY = selectedSymbol.includes('JPY');
-  const pipDecimal = isJPY ? 2 : 4;
+
+  // A price of 0 means the feed has not filled yet. TradingContext/usePaperTrading now refuse
+  // the order too, but the panel must say so: previously a click here booked an entry at 0.00 and
+  // P&L then rendered as (livePrice - 0) * lots * contractSize — ~+$108k of phantom profit for
+  // one EUR/USD lot.
+  const hasLivePrice = Number.isFinite(currentPrice) && currentPrice > 0;
+  const canTrade = hasLivePrice;
 
   const handleOpenMarketOrder = (type: 'BUY' | 'SELL') => {
     setErrorText('');
 
-    if (amount <= 0) {
-      setErrorText('Lot size must be greater than 0.');
+    if (!hasLivePrice) {
+      setErrorText('Waiting for a live market price — orders are disabled until the feed fills.');
+      return;
+    }
+
+    const pre = validateOrder({ price: currentPrice, amount, maxLots: MAX_LOTS });
+    if (!pre.ok) {
+      setErrorText(
+        pre.reason === 'NO_PRICE'
+          ? 'Waiting for a live market price — orders are disabled until the feed fills.'
+          : `Lot size must be between 0.01 and ${MAX_LOTS}.`
+      );
       return;
     }
 
@@ -155,8 +179,8 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
       const slParsed = parseFloat(customSl);
       const tpParsed = parseFloat(customTp);
 
-      slValue = !isNaN(slParsed) && slParsed > 0 ? slParsed : activeSignal.sl;
-      tpValue = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : activeSignal.tp;
+      slValue = !isNaN(slParsed) && slParsed > 0 ? slParsed : suggestedSl;
+      tpValue = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : suggestedTp;
 
       // Simple validation sanity check
       if (type === 'BUY') {
@@ -180,8 +204,13 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
       }
     }
 
-    onOpenPosition(type, amount, slValue, tpValue);
-    
+    const result = onOpenPosition(type, amount, slValue, tpValue);
+    if (!result.ok) {
+      // Message text lives next to the validator so panel and hook can never disagree.
+      setErrorText(ORDER_REJECTION_TEXT[result.reason]);
+      return;
+    }
+
     // Clear inputs
     setCustomSl('');
     setCustomTp('');
@@ -189,8 +218,12 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
 
   // Pre-fill fields with signal suggestions
   const handleAutoFill = () => {
-    setCustomSl(activeSignal.sl.toString());
-    setCustomTp(activeSignal.tp.toString());
+    if (!usableLevels) {
+      setErrorText('No directional signal to copy yet — set SL/TP manually.');
+      return;
+    }
+    setCustomSl(String(activeSignal.sl));
+    setCustomTp(String(activeSignal.tp));
     setUseSltp(true);
     setErrorText('');
   };
@@ -285,7 +318,8 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
               <button
                 type="button"
                 onClick={handleAutoFill}
-                disabled={activeSignal.type === 'NEUTRAL'}
+                disabled={!usableLevels}
+                title={usableLevels ? 'Copy the active signal levels into SL/TP' : 'Waiting for a directional signal'}
                 className="w-full py-2 px-1.5 border border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 text-zinc-400 hover:text-white rounded text-[10px] font-mono tracking-tight uppercase transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
@@ -315,7 +349,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                   <span className="text-[9px] text-zinc-500 font-mono uppercase block mb-1">Stop Loss (SL)</span>
                   <input
                     type="text"
-                    placeholder={`e.g. ${activeSignal.sl}`}
+                    placeholder={suggestedSl ? `e.g. ${suggestedSl}` : 'stop price (optional)'}
                     value={customSl}
                     onChange={(e) => setCustomSl(e.target.value)}
                     className="w-full bg-zinc-950 text-xs font-mono border border-zinc-800 outline-none rounded p-1.5 text-zinc-200"
@@ -325,7 +359,7 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
                   <span className="text-[9px] text-zinc-500 font-mono uppercase block mb-1">Take Profit (TP)</span>
                   <input
                     type="text"
-                    placeholder={`e.g. ${activeSignal.tp}`}
+                    placeholder={suggestedTp ? `e.g. ${suggestedTp}` : 'target price (optional)'}
                     value={customTp}
                     onChange={(e) => setCustomTp(e.target.value)}
                     className="w-full bg-zinc-950 text-xs font-mono border border-zinc-800 outline-none rounded p-1.5 text-zinc-200"
@@ -480,13 +514,17 @@ export const PositionsPanel: React.FC<PositionsPanelProps> = () => {
           <div className="grid grid-cols-2 gap-2 text-xs pt-1">
             <button
               onClick={() => handleOpenMarketOrder('BUY')}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded py-2 transition-colors cursor-pointer flex items-center justify-center gap-1.5 uppercase font-display"
+              disabled={!canTrade}
+              title={canTrade ? 'Open a market buy at the live price' : 'Waiting for live market data'}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded py-2 transition-colors cursor-pointer flex items-center justify-center gap-1.5 uppercase font-display disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-600"
             >
               <TrendingUp className="w-4 h-4" />
               Buy / Long
             </button>
             <button
               onClick={() => handleOpenMarketOrder('SELL')}
+              disabled={!canTrade}
+              title={canTrade ? 'Open a market sell at the live price' : 'Waiting for live market data'}
               className="bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded py-2 transition-colors cursor-pointer flex items-center justify-center gap-1.5 uppercase font-display"
             >
               <TrendingDown className="w-4 h-4" />

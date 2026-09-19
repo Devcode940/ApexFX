@@ -1,4 +1,3 @@
-import { WebSocket } from 'ws';
 import { fetchWithTimeout } from '../lib/fetch';
 import { log, warn, error } from '../lib/logger';
 
@@ -50,8 +49,6 @@ export function createInitialWatchlist(): WatchlistItem[] {
 export const serverWatchlist: WatchlistItem[] = createInitialWatchlist();
 
 let tdRESTCooldownUntil = 0;
-const TD_QUOTE_SYNC_MS = Number(process.env.TWELVEDATA_QUOTE_SYNC_MS) || 900_000;
-const TD_POLL_MS = Number(process.env.TWELVEDATA_POLL_MS) || 15_000;
 
 function getTdApiKey(): string | undefined {
   return process.env.TWELVEDATA_API_KEY;
@@ -108,22 +105,47 @@ export async function fetchTwelveDataQuotes(): Promise<Set<string>> {
   return applied;
 }
 
-export async function fetchYahooPricesFor(items: typeof serverWatchlist) {
-  const symbolsMap: Record<string, string> = {
-    'EURUSD': 'EURUSD=X',
-    'GBPUSD': 'GBPUSD=X',
-    'USDJPY': 'USDJPY=X',
-    'AUDUSD': 'AUDUSD=X',
-    'USDCAD': 'USDCAD=X',
-    'GBPJPY': 'GBPJPY=X',
-    'XAUUSD': 'XAUUSD=X',
-    'XAGUSD': 'SI=F',
-  };
+/**
+ * Single source of truth for Yahoo Finance tickers, shared by the quote path AND the history
+ * path. Previously yahoo.ts kept its own copy that mapped XAGUSD to 'XAGUSD=X' while this one
+ * used 'SI=F' — the divergence meant silver *prices* came from COMEX futures while silver *candles*
+ * came from a spot symbol Yahoo does not publish (the README itself says so), so the chart and the
+ * paper-trade entry price were derived from two different instruments.
+ */
+export const YAHOO_SYMBOLS: Record<string, string> = {
+  'EURUSD': 'EURUSD=X',
+  'GBPUSD': 'GBPUSD=X',
+  'USDJPY': 'USDJPY=X',
+  'AUDUSD': 'AUDUSD=X',
+  'USDCAD': 'USDCAD=X',
+  'GBPJPY': 'GBPJPY=X',
+  'XAUUSD': 'XAUUSD=X',
+  'XAGUSD': 'SI=F',
+};
 
+export function yahooTickerFor(symbol: string): string {
+  return YAHOO_SYMBOLS[symbol] || `${symbol}=X`;
+}
+
+/** Consecutive upstream failure cycles, used to throttle logs and back the caller off. */
+let yahooConsecutiveFailures = 0;
+let yahooFailureLogCount = 0;
+export function getYahooFailureStreak(): number { return yahooConsecutiveFailures; }
+
+export interface YahooPriceSyncResult {
+  attempted: number;
+  applied: number;
+  failed: number;
+}
+
+export async function fetchYahooPricesFor(items: typeof serverWatchlist): Promise<YahooPriceSyncResult> {
+
+  let failures = 0;
+  let applied = 0;
   await Promise.all(
     items.map(async (item) => {
       try {
-        const ticker = symbolsMap[item.symbol] || `${item.symbol}=X`;
+        const ticker = yahooTickerFor(item.symbol);
         const res = await fetchWithTimeout(
           `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`,
           { timeoutMs: 6000 }
@@ -147,26 +169,65 @@ export async function fetchYahooPricesFor(items: typeof serverWatchlist) {
             );
             const prevClose = meta?.chartPreviousClose || currentPrice;
             item.change = parseFloat((((currentPrice - prevClose) / prevClose) * 100).toFixed(2));
+            applied += 1;
           }
         }
       } catch (e) {
-        error(`Failed to fetch real price for ${item.symbol}:`, e);
+        failures += 1;
+        // A dead upstream used to emit one full stack trace per symbol per tick (8 lines every
+        // 5s => ~28k lines during a 30-minute outage). Report the first failure of a streak,
+        // then sample so the operator sees it is still broken without drowning in it.
+        yahooFailureLogCount += 1;
+        if (yahooFailureLogCount === 1) {
+          error(`[Yahoo] price feed down; first failure (${item.symbol}):`, e);
+        } else if (yahooFailureLogCount % 12 === 0) {
+          warn(`[Yahoo] price feed still failing (${yahooFailureLogCount} consecutive symbol errors, streak #${yahooConsecutiveFailures + 1})`);
+        }
       }
     })
   );
+
+  if (failures === 0) {
+    if (yahooConsecutiveFailures > 0) log(`[Yahoo] price feed recovered after ${yahooConsecutiveFailures} failed cycle(s).`);
+    yahooConsecutiveFailures = 0;
+    yahooFailureLogCount = 0;
+  } else {
+    yahooConsecutiveFailures += 1;
+  }
+
+  return { attempted: items.length, applied: applied, failed: failures };
 }
 
-export async function fetchRealLatestPrices() {
+export interface FeedSyncSummary {
+  source: 'twelvedata' | 'yahoo';
+  attempted: number;
+  applied: number;
+  failed: number;
+}
+
+export async function fetchRealLatestPrices(): Promise<FeedSyncSummary> {
   const tdApiKey = getTdApiKey();
   if (tdApiKey) {
     const applied = await fetchTwelveDataQuotes();
     const remaining = serverWatchlist.filter((i) => !applied.has(i.symbol));
+    let yahoo = { attempted: 0, applied: 0, failed: 0 };
     if (remaining.length > 0) {
-      await fetchYahooPricesFor(remaining);
+      yahoo = await fetchYahooPricesFor(remaining);
     }
-    return;
+    return {
+      source: 'twelvedata',
+      attempted: serverWatchlist.length,
+      applied: applied.size + yahoo.applied,
+      failed: yahoo.failed,
+    };
   }
-  await fetchYahooPricesFor(serverWatchlist);
+  const yahoo = await fetchYahooPricesFor(serverWatchlist);
+  return { source: 'yahoo', attempted: yahoo.attempted, applied: yahoo.applied, failed: yahoo.failed };
+}
+
+/** Which primary feed the server is using — the client needs this to label its HUD honestly. */
+export function marketSource(): 'twelvedata' | 'yahoo' {
+  return getTdApiKey() ? 'twelvedata' : 'yahoo';
 }
 
 export function getQuoteSyncMs() {

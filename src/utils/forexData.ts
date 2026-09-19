@@ -1,4 +1,4 @@
-import { Candlestick, Timeframe, WatchlistItem, TechnicalIndicatorsState, Pattern, TradingSignal, NewsItem } from '../types';
+import { Candlestick, Timeframe, WatchlistItem, TechnicalIndicatorsState, Pattern, TradingSignal } from '../types';
 
 export const PAIRS_CONFIG: Record<string, { name: string; pipDecimal: number; spreadPips: number }> = {
   'EURUSD': { name: 'EUR / USD', pipDecimal: 4, spreadPips: 1.2 },
@@ -389,7 +389,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
     const lowerWick = Math.min(c.open, c.close) - c.low;
     const upperWick = c.high - Math.max(c.open, c.close);
 
-    let pat: Omit<Pattern, 'winRate' | 'reliability' | 'profitFactor' | 'volumeConfirm' | 'score' | 'indicatorsConfirm'> | null = null;
+    let pat: Omit<Pattern, 'winRate' | 'reliability' | 'volumeConfirm' | 'score' | 'indicatorsConfirm'> | null = null;
 
     // 1. DOJI
     const isDoji = (body / range) < 0.12 && range > 0;
@@ -553,14 +553,18 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
       // Final limits and formatting
       const winRate = Math.min(89, Math.max(38, baseWinRate));
       const reliability = winRate > 75 ? 'High' : winRate >= 64 ? 'Medium' : 'Low';
-      const profitFactor = parseFloat((1.1 + (winRate - 45) * 0.025).toFixed(2));
+      // (Removed 2026-09-16: `profitFactor = 1.1 + (winRate - 45) * 0.025`.) A profit factor is
+      // grossProfit / grossLoss and requires knowing the size of the winning and losing moves - which
+      // pattern detection from candle geometry does not have. Deriving it from the win rate produced a
+      // monotone re-labelling of a number displayed right next to it, rendered with 2 decimals as
+      // "1.10x", i.e. shaped exactly like a backtested statistic. The real one lives in
+      // PerformanceDashboard (computed from the closed-trade ledger); do not re-add a second, fake one.
       const score = Math.round(winRate * (volumeConfirm ? 1.05 : 1.0) * (reliability === 'High' ? 1.1 : 1.0));
 
       patterns.push({
         ...pat,
         winRate,
         reliability,
-        profitFactor,
         volumeConfirm,
         score,
         indicatorsConfirm: indicatorsConfirm.length > 0 ? indicatorsConfirm : undefined,

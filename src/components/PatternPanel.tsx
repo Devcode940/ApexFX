@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { Pattern } from '../types';
-import { Sparkles, Eye, TrendingUp, TrendingDown, RefreshCw, Award, ShieldCheck, HelpCircle } from 'lucide-react';
+import { Sparkles, Eye, RefreshCw, Award, ShieldCheck } from 'lucide-react';
 
 import { useTrading } from '../context/TradingContext';
 
@@ -120,7 +119,6 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
                 if (isBearish) sentimentBadge = 'bg-rose-950/40 text-rose-400 border border-rose-900/30';
 
                 const winRate = pat.winRate || 50;
-                const profitFactor = pat.profitFactor || 1.1;
                 const reliability = pat.reliability || 'Low';
 
                 let reliabilityColor = 'text-zinc-400 border-zinc-800 bg-zinc-900/40';
@@ -169,20 +167,16 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
                       </div>
                     </div>
 
-                    {/* Performance Auto-Evaluator metrics block */}
-                    <div className="grid grid-cols-3 gap-1.5 bg-zinc-950/60 p-2 rounded-lg border border-zinc-900 text-center font-mono my-2">
+                    {/* Heuristic metrics block: pattern detection scores these from candle geometry,
+                        so both numbers are estimates by construction. A profit factor column was removed
+                        on 2026-09-16 because it was derived from win rate rather than measured. */}
+                    <div className="grid grid-cols-2 gap-1.5 bg-zinc-950/60 p-2 rounded-lg border border-zinc-900 text-center font-mono my-2">
                       <div className="flex flex-col justify-center border-r border-zinc-900">
                         <span className="text-[8px] text-zinc-500 uppercase leading-none">Est. Win Rate</span>
                         <span className={`text-xs font-extrabold mt-0.5 ${
                           winRate >= 72 ? 'text-emerald-400' : winRate >= 64 ? 'text-amber-400' : 'text-zinc-400'
                         }`}>
                           {winRate}%
-                        </span>
-                      </div>
-                      <div className="flex flex-col justify-center border-r border-zinc-900">
-                        <span className="text-[8px] text-zinc-500 uppercase leading-none">Profit Factor</span>
-                        <span className="text-xs font-bold text-zinc-300 mt-0.5">
-                          {profitFactor.toFixed(2)}x
                         </span>
                       </div>
                       <div className="flex flex-col justify-center">

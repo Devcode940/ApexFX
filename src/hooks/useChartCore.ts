@@ -173,6 +173,11 @@ export function useChartCore(params: UseChartCoreParams): void {
     const container = containerRef.current;
     if (!container || data.length === 0) return;
 
+    // Capture the ref object for the cleanup closure. Reading chartRefs.current at cleanup time
+    // can observe a *different* object if another effect re-assigned it (react-hooks/exhaustive-deps
+    // warning) — leaving price lines/series from the disposed chart registered.
+    const refs = chartRefs.current;
+
     const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
 
     // Cleanup previous
@@ -494,12 +499,12 @@ export function useChartCore(params: UseChartCoreParams): void {
       try { chart.timeScale().unsubscribeSizeChange(updateCustomOverlays); } catch {}
       resizeObserver.disconnect();
       container.removeEventListener('dblclick', handleDblClick);
-      if (chartRefs.current.unsubscribeSync) chartRefs.current.unsubscribeSync();
+      if (refs.unsubscribeSync) refs.unsubscribeSync();
       try { chart.unsubscribeClick(handleChartClick); } catch {}
       try { chart.unsubscribeCrosshairMove(handleCrosshairMove); } catch {}
-      try { chartRefs.current.priceLines.forEach((line) => candleSeries.removePriceLine(line)); } catch {}
-      try { if (indicators.fibonacci) chartRefs.current.fibLines.forEach((line) => candleSeries.removePriceLine(line)); } catch {}
-      try { chartRefs.current.trendlineSeries.forEach((s) => chart.removeSeries(s)); } catch {}
+      try { refs.priceLines.forEach((line) => candleSeries.removePriceLine(line)); } catch {}
+      try { if (indicators.fibonacci) refs.fibLines.forEach((line) => candleSeries.removePriceLine(line)); } catch {}
+      try { refs.trendlineSeries.forEach((s) => chart.removeSeries(s)); } catch {}
       if (chartRef.current) {
         try { chartRef.current.remove(); } catch {}
         chartRef.current = null;
@@ -512,7 +517,7 @@ export function useChartCore(params: UseChartCoreParams): void {
         try { macdChartRef.current.remove(); } catch {}
         macdChartRef.current = null;
       }
-      chartRefs.current.candleSeries = null;
+      refs.candleSeries = null; // use the captured object, not the live ref, in cleanup
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, theme, chartHeight, isExpandedFullScreen, isRsiMinimized, isMacdMinimized, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, data.length]);

@@ -1,6 +1,6 @@
 import { fetchWithTimeout } from '../lib/fetch';
-import { error, warn } from '../lib/logger';
-import { TD_SYMBOLS } from './market';
+import { warn } from '../lib/logger';
+import { TD_SYMBOLS, yahooTickerFor } from './market';
 import { historyCache } from '../lib/cache';
 
 const TD_INTERVALS: Record<string, string> = {
@@ -11,6 +11,41 @@ const TD_INTERVALS: Record<string, string> = {
   '4H': '4h',
   'D': '1day',
 };
+
+/**
+ * Aggregate OHLCV candles into fixed absolute buckets.
+ *
+ * Bucketing is keyed on `Math.floor(time / bucketSeconds)`, NOT on array index: with index-based
+ * chunking (`i += 4`), one missing hour — a weekend close, a market holiday, a gap in the
+ * upstream feed — shifts every later boundary and silently mixes two different 4-hour windows
+ * into one bar. Exported so the behaviour is unit-testable.
+ */
+export function aggregateCandlesByEpoch(
+  candles: Array<{ time: number; open: number; high: number; low: number; close: number; volume?: number }>,
+  bucketSeconds: number
+): Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }> {
+  const buckets = new Map<number, typeof candles>();
+  for (const c of candles) {
+    const key = Math.floor(c.time / bucketSeconds) * bucketSeconds;
+    const arr = buckets.get(key);
+    if (arr) arr.push(c);
+    else buckets.set(key, [c]);
+  }
+  const out: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }> = [];
+  for (const [time, chunk] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    if (chunk.length === 0) continue;
+    chunk.sort((a, b) => a.time - b.time);
+    out.push({
+      time,
+      open: chunk[0].open,
+      high: Math.max(...chunk.map((c) => c.high)),
+      low: Math.min(...chunk.map((c) => c.low)),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce((sum, c) => sum + (c.volume || 0), 0),
+    });
+  }
+  return out;
+}
 
 export async function fetchTwelveDataHistory(symbol: string, timeframe: string) {
   const tdApiKey = process.env.TWELVEDATA_API_KEY;
@@ -60,18 +95,8 @@ export async function fetchYahooHistory(symbol: string, timeframe: string) {
   const cached = historyCache.get(cacheKey);
   if (cached) return cached;
 
-  const symbolsMap: Record<string, string> = {
-    'EURUSD': 'EURUSD=X',
-    'GBPUSD': 'GBPUSD=X',
-    'USDJPY': 'USDJPY=X',
-    'AUDUSD': 'AUDUSD=X',
-    'USDCAD': 'USDCAD=X',
-    'GBPJPY': 'GBPJPY=X',
-    'XAUUSD': 'XAUUSD=X',
-    'XAGUSD': 'XAGUSD=X',
-  };
-
-  const ticker = symbolsMap[symbol] || `${symbol}=X`;
+  // Shared with the quote path so a symbol can never resolve to two different instruments.
+  const ticker = yahooTickerFor(symbol);
 
   let interval = '1h';
   let range = '30d';
@@ -167,19 +192,7 @@ export async function fetchYahooHistory(symbol: string, timeframe: string) {
       }
 
       if (timeframe === '4H') {
-        const aggregated: any[] = [];
-        for (let i = 0; i < candlesticks.length; i += 4) {
-          const chunk = candlesticks.slice(i, i + 4);
-          if (chunk.length === 0) continue;
-          const open = chunk[0].open;
-          const close = chunk[chunk.length - 1].close;
-          const high = Math.max(...chunk.map((c: any) => c.high));
-          const low = Math.min(...chunk.map((c: any) => c.low));
-          const volume = chunk.reduce((sum: number, c: any) => sum + (c.volume || 0), 0);
-          const time = chunk[0].time;
-          aggregated.push({ time, open, high, low, close, volume });
-        }
-        candlesticks = aggregated;
+        candlesticks = aggregateCandlesByEpoch(candlesticks, 4 * 3600);
       }
 
       const resultObj = {

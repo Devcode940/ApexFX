@@ -1,17 +1,61 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { TradePosition, ClosedTrade, WatchlistItem } from '../types';
-import { getContractSize } from '../utils/forexData';
+import { buildClosedTrade, markToMarket, validateOrder, makeId, MAX_LOTS, type OrderRejectionReason } from '../utils/paperTrading';
 
+// A discriminated union. This was an `interface { ok: boolean; id?; reason? }` for one reason only:
+// with `strictNullChecks: false` the compiler rejects narrowing a union (`result.reason` after
+// `if (!result.ok)`), so the loose shape was the workaround. Now that `strict` is on, the honest
+// shape compiles and a success can no longer carry a reason - or a failure an id.
+export type OpenPositionResult =
+  | { ok: true; id: string }
+  | { ok: false; reason: OrderRejectionReason };
+
+export interface UsePaperTradingApi {
+  positions: TradePosition[];
+  setPositions: React.Dispatch<React.SetStateAction<TradePosition[]>>;
+  closedTrades: ClosedTrade[];
+  setClosedTrades: React.Dispatch<React.SetStateAction<ClosedTrade[]>>;
+  /** Returns a result so the caller can explain a rejection instead of silently no-oping. */
+  handleOpenPosition: (type: 'BUY' | 'SELL', amount: number, sl?: number, tp?: number) => OpenPositionResult;
+  handleClosePosition: (id: string) => void;
+  handleClearHistory: () => void;
+}
+
+/**
+ * Paper-trading state. Rules that move money live in `utils/paperTrading` (pure, unit-tested);
+ * this hook owns state and persistence only.
+ *
+ * Fixed here in the 2026-09-13 pass:
+ *  - S3.1 `handleClosePosition` called `setClosedTrades` *inside* the `setPositions` updater.
+ *    Updaters must be pure; React 19 + StrictMode double-invokes them in development, so every
+ *    manual close appended TWO closed trades — skewing win rate / profit factor and duplicating
+ *    rows sent to Supabase and CSV export.
+ *  - S3.2 positions could be opened at `currentPrice === 0` (cold feed), producing entries of
+ *    0.00 and P&L around +$108k per EUR/USD lot.
+ *  - ids were `Date.now() + 4 random chars` (collisions across users on a shared PRIMARY KEY,
+ *    and unstable React keys under double invocation).
+ */
 export function usePaperTrading(
   watchlistItems: WatchlistItem[],
   selectedSymbol: string,
   currentPrice: number
-) {
+): UsePaperTradingApi {
   const [positions, setPositions] = useState<TradePosition[]>(() => {
     try {
       const cached = localStorage.getItem('forexinsight_positions');
-      if (cached) return JSON.parse(cached);
-    } catch {}
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          // A corrupt/partial row used to crash every downstream reduce over `pnl`; drop what
+          // is not shaped like a position instead of poisoning the whole panel.
+          return parsed.filter(
+            (p: TradePosition) => p && typeof p.id === 'string' && Number.isFinite(p.entryPrice) && Number.isFinite(p.amount)
+          );
+        }
+      }
+    } catch {
+      /* corrupt cache -> start clean rather than crash the terminal */
+    }
     return [];
   });
 
@@ -22,7 +66,9 @@ export function usePaperTrading(
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
     return [];
   });
 
@@ -31,7 +77,9 @@ export function usePaperTrading(
     const id = setTimeout(() => {
       try {
         localStorage.setItem('forexinsight_positions', JSON.stringify(positions));
-      } catch {}
+      } catch {
+        /* quota exceeded / private mode */
+      }
     }, 300);
     return () => clearTimeout(id);
   }, [positions]);
@@ -40,145 +88,82 @@ export function usePaperTrading(
     const id = setTimeout(() => {
       try {
         localStorage.setItem('forexinsight_closed_trades', JSON.stringify(closedTrades));
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }, 300);
     return () => clearTimeout(id);
   }, [closedTrades]);
 
-  // PnL updates throttled to avoid O(n) on every tick
-  const positionsRef = useMemo(() => positions, [positions]);
+  // Handlers read through refs so a click never uses a stale price/symbol captured at render.
+  const positionsRef = useRef(positions);
+  const watchlistRef = useRef(watchlistItems);
+  const priceRef = useRef(currentPrice);
+  const symbolRef = useRef(selectedSymbol);
+  useEffect(() => { positionsRef.current = positions; }, [positions]);
+  useEffect(() => { watchlistRef.current = watchlistItems; }, [watchlistItems]);
+  useEffect(() => { priceRef.current = currentPrice; }, [currentPrice]);
+  useEffect(() => { symbolRef.current = selectedSymbol; }, [selectedSymbol]);
 
+  // --- mark to market + SL/TP execution ---
   useEffect(() => {
-    // Throttle PnL calculation to max once per 500ms per symbol change
-    let nextDifferent = false;
-    const closedToLog: ClosedTrade[] = [];
+    const result = markToMarket(positions, watchlistItems);
+    if (!result.changed) return;
+    // Both setters are called from the effect body, each exactly once — never from inside an
+    // updater (see S3.1).
+    setPositions(result.positions);
+    if (result.closed.length > 0) setClosedTrades((prev) => [...result.closed, ...prev]);
+  }, [watchlistItems, positions]);
 
-    const nextPositions = positionsRef.map((pos) => {
-      const priceItem = watchlistItems.find((item) => item.symbol === pos.symbol);
-      if (!priceItem || priceItem.price === 0) return pos;
+  const handleOpenPosition = useCallback<UsePaperTradingApi['handleOpenPosition']>(
+    (type, amount, sl, tp) => {
+      const price = priceRef.current;
+      // maxLots is enforced HERE, not only in the panel: this is the function that mutates the book,
+      // so any future caller (keyboard shortcut, Supabase pull replay, test harness) inherits the ceiling.
+      const valid = validateOrder({ type, price, amount, sl, tp, maxLots: MAX_LOTS });
+      if (!valid.ok) return { ok: false, reason: valid.reason };
 
-      const livePrice = priceItem.price;
-      const contractSize = getContractSize(pos.symbol);
-
-      let pnl = parseFloat(
-        ((pos.type === 'BUY' ? livePrice - pos.entryPrice : pos.entryPrice - livePrice) * pos.amount * contractSize).toFixed(2)
-      );
-
-      const isSlHit = pos.sl !== undefined && (pos.type === 'BUY' ? livePrice <= pos.sl : livePrice >= pos.sl);
-      const isTpHit = pos.tp !== undefined && (pos.type === 'BUY' ? livePrice >= pos.tp : livePrice <= pos.tp);
-
-      if (isSlHit || isTpHit) {
-        const exitPrice = isSlHit ? pos.sl! : pos.tp!;
-        const reason = isSlHit ? 'SL Hit' : 'TP Hit';
-        const exitPnl = parseFloat(
-          ((pos.type === 'BUY' ? exitPrice - pos.entryPrice : pos.entryPrice - exitPrice) * pos.amount * contractSize).toFixed(2)
-        );
-        const nowMs = Date.now();
-        const openTimeMs = pos.openedAt || nowMs - 3600000;
-        const duration = Math.max(1000, nowMs - openTimeMs);
-
-        closedToLog.push({
-          id: `closed_${nowMs}_${Math.random().toString(36).substr(2, 4)}`,
-          symbol: pos.symbol,
-          type: pos.type,
-          entryPrice: pos.entryPrice,
-          exitPrice,
-          amount: pos.amount,
-          pnl: exitPnl,
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          closeReason: reason as any,
-          openedAt: openTimeMs,
-          closedAt: nowMs,
-          durationMs: duration,
-        });
-        nextDifferent = true;
-        return null;
-      }
-
-      if (pos.currentPrice !== livePrice || pos.pnl !== pnl) {
-        nextDifferent = true;
-        return { ...pos, currentPrice: livePrice, pnl };
-      }
-
-      return pos;
-    }).filter((p): p is TradePosition => p !== null);
-
-    if (nextDifferent) {
-      setPositions(nextPositions);
-    }
-
-    if (closedToLog.length > 0) {
-      setClosedTrades((prev) => [...closedToLog, ...prev]);
-    }
-  }, [watchlistItems, positionsRef]);
-
-  const handleOpenPosition = useCallback(
-    (type: 'BUY' | 'SELL', amount: number, sl?: number, tp?: number) => {
       const nowMs = Date.now();
       const newPos: TradePosition = {
-        id: `pos_${nowMs}_${Math.random().toString(36).substr(2, 4)}`,
-        symbol: selectedSymbol,
+        id: makeId('pos'),
+        symbol: symbolRef.current,
         type,
-        entryPrice: currentPrice,
-        currentPrice: currentPrice,
+        entryPrice: price,
+        currentPrice: price,
         amount,
         sl,
         tp,
         pnl: 0,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         openedAt: nowMs,
       };
       setPositions((prev) => [newPos, ...prev]);
+      return { ok: true, id: newPos.id };
     },
-    [selectedSymbol, currentPrice]
+    []
   );
 
-  const handleClosePosition = useCallback(
-    (id: string) => {
-      setPositions((prev) => {
-        const target = prev.find((p) => p.id === id);
-        if (target) {
-          const priceItem = watchlistItems.find((item) => item.symbol === target.symbol);
-          const livePrice = priceItem?.price ?? target.currentPrice ?? currentPrice;
-          const contractSize = getContractSize(target.symbol);
-          let pnl = 0;
-          if (target.type === 'BUY') {
-            pnl = (livePrice - target.entryPrice) * target.amount * contractSize;
-          } else {
-            pnl = (target.entryPrice - livePrice) * target.amount * contractSize;
-          }
+  const handleClosePosition = useCallback((id: string) => {
+    const target = positionsRef.current.find((p) => p.id === id);
+    if (!target) return;
 
-          const nowMs = Date.now();
-          const openTimeMs = target.openedAt || nowMs - 1800000;
-          const duration = Math.max(1000, nowMs - openTimeMs);
+    const priceItem = watchlistRef.current.find((item) => item.symbol === target.symbol);
+    // Never mark a manual close at a 0 price; fall back to the last marked price, then the
+    // context price.
+    const livePrice =
+      priceItem && Number.isFinite(priceItem.price) && priceItem.price > 0
+        ? priceItem.price
+        : target.currentPrice > 0
+          ? target.currentPrice
+          : priceRef.current;
 
-          setClosedTrades((prevClosed) => [
-            {
-              id: `closed_${nowMs}_${Math.random().toString(36).substr(2, 4)}`,
-              symbol: target.symbol,
-              type: target.type,
-              entryPrice: target.entryPrice,
-              exitPrice: livePrice,
-              amount: target.amount,
-              pnl: parseFloat(pnl.toFixed(2)),
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              closeReason: 'Manual',
-              openedAt: openTimeMs,
-              closedAt: nowMs,
-              durationMs: duration,
-            },
-            ...prevClosed,
-          ]);
-        }
-        return prev.filter((p) => p.id !== id);
-      });
-    },
-    [watchlistItems, currentPrice]
-  );
+    const record = buildClosedTrade({ position: target, exitPrice: livePrice });
 
-  const handleClearHistory = useCallback(() => {
-    setClosedTrades([]);
+    setPositions((prev) => prev.filter((p) => p.id !== id));
+    setClosedTrades((prev) => [record, ...prev]);
   }, []);
+
+  const handleClearHistory = useCallback(() => setClosedTrades([]), []);
 
   return {
     positions,

@@ -186,7 +186,7 @@ export const AiAssistant: React.FC = () => {
                       <p key={lineIdx} className={lineIdx > 0 ? 'mt-1.5' : ''}>
                         {line.split('**').map((chunk, chunkIdx) =>
                           chunkIdx % 2 === 1 ? <strong key={chunkIdx} className="font-bold text-white">{chunk}</strong> : chunk
-                        ).map((item, key) => {
+                        ).map((item) => {
                           if (typeof item === 'string') {
                             return item.split('`').map((subchunk, subidx) =>
                               subidx % 2 === 1 ? <code key={subidx} className="bg-zinc-950 border border-zinc-800 text-emerald-400 px-1.5 py-0.5 rounded font-mono text-[10px]">{subchunk}</code> : subchunk
