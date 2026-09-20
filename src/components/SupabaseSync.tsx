@@ -157,17 +157,21 @@ export const SupabaseSync: React.FC<SupabaseSyncProps> = () => {
     if (!session) return;
     setSyncing(true);
     try {
+      const userId = session.user.id;
+
       // 1. Fetch positions
       const { data: dbPositions, error: posErr } = await supabase
         .from('positions')
-        .select('*');
+        .select('*')
+        .eq('user_id', userId);
       
       if (posErr) throw posErr;
 
       // 2. Fetch closed trades
       const { data: dbTrades, error: tradeErr } = await supabase
         .from('closed_trades')
-        .select('*');
+        .select('*')
+        .eq('user_id', userId);
 
       if (tradeErr) throw tradeErr;
 

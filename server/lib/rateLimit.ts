@@ -98,9 +98,9 @@ async function isRateLimitedUpstash(
       });
     }
 
-    return count > max;
+    return count >= max;
   } catch {
-    // On Upstash failure, fallback to allow (fail open) to avoid blocking
+    // On Upstash failure, the caller falls back to the local in-memory limiter.
     return false;
   }
 }
