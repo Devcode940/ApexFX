@@ -1,18 +1,20 @@
 -- SUPABASE DATABASE SCHEMA & POLICIES
 -- Copy and run this in your Supabase SQL Editor (https://supabase.com)
 
--- Performance indexes for RLS-filtered queries
-CREATE INDEX IF NOT EXISTS idx_positions_user ON public.positions(user_id);
-CREATE INDEX IF NOT EXISTS idx_closed_trades_user_time ON public.closed_trades(user_id, close_time DESC);
-CREATE INDEX IF NOT EXISTS idx_drawings_user_symbol ON public.drawings(user_id, symbol);
+-- Keys are per-user composites (user_id, id), NOT a global id. The old `id TEXT PRIMARY KEY` meant
+-- one local id could belong to exactly one account on the whole project: a second user upserting the
+-- same id hit an UPDATE on someone else's row, which RLS then rejected as a policy violation. Client
+-- ids are UUIDs now, so collisions are unlikely - but "unlikely" is not a constraint, and the composite
+-- key also gives the upsert path a conflict target that is correct by construction.
 
--- 1. Create drawings table
+-- 1. Create drawings table (present for schema completeness: nothing in src/ writes to it today)
 CREATE TABLE IF NOT EXISTS public.drawings (
-    id TEXT PRIMARY KEY,
-    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     data JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    PRIMARY KEY (user_id, id)
 );
 
 -- Enable RLS on drawings
@@ -34,8 +36,8 @@ CREATE POLICY "Users can delete their own drawings" ON public.drawings
 
 -- 2. Create positions table
 CREATE TABLE IF NOT EXISTS public.positions (
-    id TEXT PRIMARY KEY,
-    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     type TEXT NOT NULL, -- 'BUY' or 'SELL'
     entry_price NUMERIC NOT NULL,
@@ -45,7 +47,8 @@ CREATE TABLE IF NOT EXISTS public.positions (
     timestamp BIGINT NOT NULL,
     pips NUMERIC,
     profit NUMERIC,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    PRIMARY KEY (user_id, id)
 );
 
 -- Enable RLS on positions
@@ -67,8 +70,8 @@ CREATE POLICY "Users can delete their own positions" ON public.positions
 
 -- 3. Create closed_trades table
 CREATE TABLE IF NOT EXISTS public.closed_trades (
-    id TEXT PRIMARY KEY,
-    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     type TEXT NOT NULL,
     entry_price NUMERIC NOT NULL,
@@ -79,7 +82,8 @@ CREATE TABLE IF NOT EXISTS public.closed_trades (
     open_time BIGINT NOT NULL,
     close_time BIGINT NOT NULL,
     close_reason TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    PRIMARY KEY (user_id, id)
 );
 
 -- Backfill column for databases created before this migration
@@ -135,3 +139,50 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE OR REPLACE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+
+-- ============================================================================
+-- 5. MIGRATION for databases created before 2026-09-13 (safe to re-run)
+--    Run this block if you already applied an earlier version of this file.
+--    It converts the three global `id` primary keys into per-user composites.
+-- ============================================================================
+
+DO $$
+DECLARE
+  t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['drawings', 'positions', 'closed_trades'] LOOP
+    -- Drop the old single-column primary key if that is what exists.
+    EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT IF EXISTS %I_pkey', t, t);
+
+    -- A key column must be NOT NULL. RLS (`auth.uid() = user_id`) already made NULL user_id
+    -- impossible for anything a browser inserted, so this only trips on service-role writes.
+    EXECUTE format('ALTER TABLE public.%I ALTER COLUMN user_id SET NOT NULL', t);
+
+    -- Add the composite key only when the table has none. A catalog check rather than an exception
+    -- handler, because "adding a second primary key" raises 42P16 and relying on a PL/pgSQL
+    -- condition *name* for it is exactly the kind of detail that silently differs across versions.
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = format('public.%I', t)::regclass AND contype = 'p'
+    ) THEN
+      EXECUTE format('ALTER TABLE public.%I ADD PRIMARY KEY (user_id, id)', t);
+    END IF;
+  END LOOP;
+END $$;
+
+-- Fast "my rows, newest first" reads without a sequential scan as the tables grow.
+CREATE INDEX IF NOT EXISTS positions_user_created_idx  ON public.positions  (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS closed_trades_user_time_idx ON public.closed_trades (user_id, close_time DESC);
+
+-- Recompute the pips column for closed trades. The client used to store
+-- `abs(exit - entry) * (symbol LIKE '%JPY' THEN 100 ELSE 10000)`, which is 100x too large for gold
+-- (a 2-decimal instrument) and disagrees with the panel's convention for silver.
+-- The CASE below MUST mirror PAIRS_CONFIG in src/utils/forexData.ts; if you change pipDecimal there,
+-- change it here too (or drop this statement and let new rows arrive correct).
+UPDATE public.closed_trades
+SET pips = ROUND(ABS(exit_price - entry_price) / CASE
+  WHEN symbol IN ('USDJPY', 'GBPJPY', 'XAUUSD') THEN 0.01
+  ELSE 0.0001
+END)
+WHERE ABS(exit_price - entry_price) > 0;

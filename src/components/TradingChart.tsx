@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { IChartApi } from 'lightweight-charts';
 import { AnimatePresence } from 'motion/react';
 import type { Candlestick, Pattern, TechnicalIndicatorsState, Timeframe } from '../types';
 import { useTrading } from '../context/TradingContext';
 import {
   ForexSessionKey,
-  generateSessionBlocks } from '../utils/forexSessions';
+  generateSessionBlocks,
+} from '../utils/forexSessions';
 import type {
   AnimTradeFilter,
   AnimatedTrade,
@@ -15,10 +16,12 @@ import type {
   DrawingTool,
   HudData,
   PatternMarkerFilter,
-  SidebarTab } from '../types/chart';
+  SidebarTab,
+} from '../types/chart';
 import { EMPTY_DRAWINGS } from '../types/chart';
 import { useChartCore } from '../hooks/useChartCore';
 import { loadDrawings, saveDrawings } from '../utils/chart/drawingTools';
+import { copySnapshot, SNAPSHOT_COPY_MESSAGE } from '../utils/clipboard';
 import { ChartHeader } from './chart/ChartHeader';
 import { DrawingToolbar } from './chart/DrawingToolbar';
 import { DrawingsManager } from './chart/DrawingsManager';
@@ -39,7 +42,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   symbol,
   timeframe,
   patterns,
-  indicators }) => {
+  indicators,
+}) => {
   const { theme: globalTheme, positions, closedTrades, handleChartSnapshot, handleToggleIndicator } = useTrading();
   const theme: ChartTheme = globalTheme === 'light' ? 'light' : 'dark';
 
@@ -76,6 +80,10 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
 
   // --- Drawing State ---
   const [drawings, setDrawings] = useState<DrawingsState>(() => loadDrawings(symbol));
+  // What the clipboard actually did, for the last few seconds. Replaces a `catch { }` that made a failed
+  // copy indistinguishable from a successful one.
+  const [snapshotNote, setSnapshotNote] = useState<string>('');
+  const snapshotNoteTimer = useRef<number | undefined>(undefined);
   const [activeTool, setActiveTool] = useState<DrawingTool>('none');
   const [trendlineStart, setTrendlineStart] = useState<ChartPoint | null>(null);
   const [fibStart, setFibStart] = useState<ChartPoint | null>(null);
@@ -100,7 +108,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
           tokyo: typeof parsed.tokyo === 'boolean' ? parsed.tokyo : (typeof parsed.asia === 'boolean' ? parsed.asia : initial.tokyo),
           london: typeof parsed.london === 'boolean' ? parsed.london : initial.london,
           newyork: typeof parsed.newyork === 'boolean' ? parsed.newyork : initial.newyork,
-          sydney: typeof parsed.sydney === 'boolean' ? parsed.sydney : initial.sydney };
+          sydney: typeof parsed.sydney === 'boolean' ? parsed.sydney : initial.sydney,
+        };
       }
     } catch { /* ignore */ }
     return initial;
@@ -164,7 +173,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       amount: p.amount,
       pnl: p.pnl,
       time: p.time,
-      isClosed: false })));
+      isClosed: false,
+    })));
     list.push(...closedList.map((t) => ({
       id: t.id,
       symbol: t.symbol,
@@ -175,7 +185,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       time: t.time,
       isClosed: true,
       exitPrice: t.exitPrice,
-      closeReason: t.closeReason })));
+      closeReason: t.closeReason,
+    })));
     return list;
   }, [animTradeFilter, positions, closedTrades]);
 
@@ -213,7 +224,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
     showSessionShading,
     symbolTradesToAnimate,
     showTradeAnimations,
-    showPatternBeams });
+    showPatternBeams,
+  });
 
   // --- Persist drawings per symbol ---
   useEffect(() => {
@@ -238,27 +250,32 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   }, [symbol]);
 
   // --- Handlers ---
-  const handleTakeSnapshot = useCallback(() => {
-    if (chartRef.current) {
-      const imageDataUrl = chartRef.current.takeScreenshot().toDataURL('image/png');
-      const textArea = document.createElement('textarea');
-      textArea.value = imageDataUrl;
-      document.body.appendChild(textArea);
-      textArea.select();
-      try {
-        document.execCommand('copy');
-      } catch {
-        /* ignore */
-      }
-      document.body.removeChild(textArea);
-      // Attach the snapshot to the AI assistant (context state + scroll into view)
-      handleChartSnapshot(imageDataUrl);
-      window.dispatchEvent(
-        new CustomEvent('apexfx:snapshot', {
-          detail: { imageDataUrl, symbol, timeframe } })
-      );
-    }
-  }, [symbol, timeframe]);
+  const handleTakeSnapshot = useCallback(async () => {
+    if (!chartRef.current) return;
+    const canvas = chartRef.current.takeScreenshot();
+    const imageDataUrl = canvas.toDataURL('image/png');
+
+    // Policy lives in utils/clipboard (unit-tested): real image first, data-URL text as a labelled
+    // fallback, and an honest outcome when the browser refuses. Never throws.
+    const outcome = await copySnapshot({
+      canvas,
+      dataUrl: imageDataUrl,
+      clipboard: navigator.clipboard,
+      ClipboardItem: typeof window !== 'undefined' ? window.ClipboardItem : undefined,
+    });
+    setSnapshotNote(SNAPSHOT_COPY_MESSAGE[outcome]);
+    window.clearTimeout(snapshotNoteTimer.current);
+    snapshotNoteTimer.current = window.setTimeout(() => setSnapshotNote(''), 4000);
+
+    // Attach the snapshot to the AI assistant (context state + scroll into view). The old extra channel,
+    // a window CustomEvent named 'apexfx:snapshot', is gone: nothing in src/ ever listened for it, and an
+    // unobserved event is how a feature looks alive while being dead.
+    handleChartSnapshot(imageDataUrl);
+    // handleChartSnapshot is a stable useCallback([]) from context, so adding it costs nothing
+    // and removes the stale-closure hazard exhaustive-deps was flagging.
+  }, [handleChartSnapshot]);
+
+  useEffect(() => () => window.clearTimeout(snapshotNoteTimer.current), []);
 
   const handleSetChartHeight = useCallback((height: number) => {
     setPreferredHeight(height);
@@ -311,6 +328,16 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
         onSnapshot={handleTakeSnapshot}
         onToggleFullScreen={() => setIsExpandedFullScreen((v) => !v)}
       />
+
+      {snapshotNote && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="self-start -mt-0.5 rounded border border-zinc-800 bg-zinc-950/80 px-2 py-1 text-[10px] font-mono text-zinc-400"
+        >
+          {snapshotNote}
+        </div>
+      )}
 
       <div className="flex gap-2">
         {/* Drawing Toolbar */}

@@ -1,9 +1,14 @@
-```
-# Environment
+# Environment — NOTE: `.env` was previously NOT ignored while README instructs users to create
+# `.env` at the repo root with live API keys. That is a one-commit secret leak.
+.env
+.env.*
+!.env.example
 .env.local
 
-# Docker
-.dockerignore
+# Local tooling / build noise
+*.tsbuildinfo
+.eslintcache
+coverage/
 
 # Dependencies
 node_modules/

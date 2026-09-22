@@ -1,0 +1,22 @@
+# Missing from the repo until the 2026-09-13 audit; .gitignore also used to list this very file,
+# which prevented it from ever being committed. Without it, `COPY . .` in the builder stage ships
+# .git/, node_modules/, and any local .env (with live API keys) into the image layers.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+node_modules
+dist
+coverage
+npm-debug.log*
+*.log
+.DS_Store
+.vscode
+.idea
+README.md
+DEPLOYMENT.md
+REVIEW*.md
+FIXES_APPLIED.md
+.github
+assets/.aistudio

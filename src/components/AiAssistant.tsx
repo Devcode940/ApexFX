@@ -295,7 +295,7 @@ export const AiAssistant: React.FC = () => {
       )}
 
       <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="p-3 bg-zinc-900 border-t border-zinc-800 flex gap-2">
-        <input type="text" disabled={isTyping} placeholder={isTyping ? 'AI is thinking…' : 'Ask AI Analyst (e.g. \"RSI check\", \"Support lines\")...'} value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-zinc-950 text-xs border border-zinc-800 focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed" />
+        <input type="text" disabled={isTyping} placeholder={isTyping ? 'AI is thinking…' : 'Ask AI Analyst (e.g. "RSI check", "Support lines")...'} value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-zinc-950 text-xs border border-zinc-800 focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed" />
         <button type="submit" disabled={isTyping} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-3.5 py-2 transition-all flex items-center justify-center cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
       </form>
     </div>

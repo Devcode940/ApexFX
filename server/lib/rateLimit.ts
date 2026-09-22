@@ -105,6 +105,52 @@ async function isRateLimitedUpstash(
   }
 }
 
+/**
+ * Per-endpoint budgets. A single global 30/min bucket was the wrong shape for this app: the
+ * watchlist poll alone is ~24/min per tab, so the fallback feed plus a chart load plus a quote
+ * cross-check tipped a *single legitimate browser tab* over the limit, and 429s were then
+ * swallowed client-side (prices just froze with no explanation). Cheap/cached endpoints get more
+ * headroom; the endpoints that cost real money (Twelve Data credits) get less.
+ */
+export const RATE_LIMIT_POLICIES: Array<{ match: (path: string) => boolean; max: number; windowMs: number; label: string }> = [
+  { match: (p) => p === '/api/health' || p === '/healthz', max: 120, windowMs: 60_000, label: 'health' },
+  { match: (p) => p.startsWith('/api/market/prices'), max: 60, windowMs: 60_000, label: 'prices' },
+  { match: (p) => p.startsWith('/api/market/history'), max: 20, windowMs: 60_000, label: 'history' },
+  // Spends upstream API credits: throttle hardest.
+  { match: (p) => p.startsWith('/api/market/quote'), max: 10, windowMs: 60_000, label: 'quote' },
+  { match: (p) => p.startsWith('/api/market/forexrate'), max: 10, windowMs: 60_000, label: 'forexrate' },
+  { match: (p) => p.startsWith('/api/market/news'), max: 15, windowMs: 60_000, label: 'news' },
+  { match: (p) => p.startsWith('/api/ws/token'), max: 20, windowMs: 60_000, label: 'ws-token' },
+];
+
+/**
+ * Resolve the policy for a request. Uses originalUrl, NOT req.path: inside
+ * `app.use('/api', mw)` Express rewrites req.path relative to the mount point ('/market/prices'),
+ * which made every policy below fall through to the default bucket. Caught by a live probe, not by
+ * the pure-function test - a nice argument for both kinds.
+ */
+export function requestPath(req: { originalUrl?: string; path?: string; baseUrl?: string }): string {
+  const raw = req.originalUrl || `${req.baseUrl || ''}${req.path || ''}` || '/';
+  return raw.split('?')[0];
+}
+
+export function policyForRequest(req: { originalUrl?: string; path?: string; baseUrl?: string }): { max: number; windowMs: number; label: string } {
+  return policyForPath(requestPath(req));
+}
+
+export function policyForPath(path: string): { max: number; windowMs: number; label: string } {
+  const hit = RATE_LIMIT_POLICIES.find((p) => p.match(path));
+  return hit ? { max: hit.max, windowMs: hit.windowMs, label: hit.label } : { max: DEFAULT_MAX, windowMs: DEFAULT_WINDOW_MS, label: 'default' };
+}
+
+/** Seconds until the window frees up, for Retry-After. */
+export function retryAfterSeconds(key: string, windowMs: number): number {
+  const hits = buckets.get(key);
+  if (!hits || hits.length === 0) return Math.ceil(windowMs / 1000);
+  const oldest = hits[0];
+  return Math.max(1, Math.ceil((oldest + windowMs - Date.now()) / 1000));
+}
+
 export async function isRateLimited(
   key: string,
   max = DEFAULT_MAX,
@@ -116,14 +162,6 @@ export async function isRateLimited(
     if (limited) return true;
     // Still also track in memory as secondary
   }
-  return isRateLimitedMemory(buckets, key, max, windowMs);
-}
-
-export function isRateLimitedSync(
-  key: string,
-  max = DEFAULT_MAX,
-  windowMs = DEFAULT_WINDOW_MS
-): boolean {
   return isRateLimitedMemory(buckets, key, max, windowMs);
 }
 

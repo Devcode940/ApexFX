@@ -25,9 +25,25 @@ ALLOWED_ORIGINS=https://yourdomain.com
 WS_SHARED_SECRET=random_secret_for_ws_token (recommended)
 UPSTASH_REDIS_REST_URL=https://... (optional, for distributed rate limiting)
 UPSTASH_REDIS_REST_TOKEN=...
+GEMINI_MODEL=gemini-3.5-flash        (optional; set it explicitly if you pin a model - the previously
+                                      hardcoded gemini-2.0-flash was retired by Google on 2026-06-01)
 ```
 
-**Note:** WebSocket is limited on Vercel serverless — client automatically falls back to HTTP polling (`/api/market/prices`). For full WS ticks, use traditional server.
+**Notes for this platform:**
+
+- **WebSockets are not available in Vercel functions** (no `upgrade` handling), so the feed connects, fails,
+  and settles into **POLL** mode against `/api/market/prices` with backoff. The header badge reports the state;
+  it is supported, not degraded. `WS_SHARED_SECRET` therefore has no effect here — leave it unset and the
+  token endpoint simply goes unused. For tick-level streaming, use Option 2.
+- **`TRUST_PROXY` needs no configuration**: `vercel.json` sets no env and the server auto-detects Vercel's edge
+  (which always forwards). Rate-limit buckets are per instance and in-memory unless Upstash Redis is set.
+- **Static and API responses get security headers from different places.** `vercel.json` `headers` covers the
+  CDN-served HTML; the Express middleware covers `/api/*`. If you change the CSP, change both.
+- **Do not set `NODE_ENV=production` for the *build*** — the deploy needs `vite build`, which respects the
+  `buildCommand` in `vercel.json`; setting it is only needed at runtime for the function.
+- **`TWELVEDATA_API_KEY` on a free plan:** the server syncs 8 symbols per REST call every 15 min (~768 credits/day);
+  see the credit note in `README.md` and raise `TWELVEDATA_QUOTE_SYNC_MS` if that is too much.
+
 
 ---
 

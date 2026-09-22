@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
 import { useTrading } from '../context/TradingContext';
-import { TradePosition } from '../types';
 import {
   Trophy,
   Clock,
@@ -8,15 +7,11 @@ import {
   PieChart,
   BarChart2,
   Activity,
-  Filter,
   CheckCircle2,
   XCircle,
-  Sparkles,
   ArrowUpRight,
   ArrowDownRight,
   Download,
-  RotateCcw,
-  ShieldAlert,
   Layers
 } from 'lucide-react';
 import {
@@ -27,9 +22,6 @@ import {
   YAxis,
   Tooltip,
   ReferenceLine,
-  BarChart,
-  Bar,
-  Cell
 } from 'recharts';
 
 // Helper to format duration in human-readable units
@@ -60,9 +52,6 @@ export const PerformanceDashboard: React.FC = () => {
     positions,
     closedTrades,
     theme,
-    selectedSymbol,
-    handleOpenPosition,
-    handleClosePosition
   } = useTrading();
 
   // Filters state

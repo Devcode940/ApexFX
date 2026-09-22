@@ -1,5 +1,5 @@
 import { fetchWithTimeout } from '../lib/fetch';
-import { error, warn } from '../lib/logger';
+import { log, warn, error } from '../lib/logger';
 
 export const PAIRS_CONFIG_WS: Record<string, { name: string; pipDecimal: number }> = {
   'EURUSD': { name: 'EUR / USD', pipDecimal: 4 },
@@ -49,6 +49,7 @@ export function createInitialWatchlist(): WatchlistItem[] {
 export const serverWatchlist: WatchlistItem[] = createInitialWatchlist();
 
 let tdRESTCooldownUntil = 0;
+
 function getTdApiKey(): string | undefined {
   return process.env.TWELVEDATA_API_KEY;
 }
@@ -104,7 +105,14 @@ export async function fetchTwelveDataQuotes(): Promise<Set<string>> {
   return applied;
 }
 
-const YAHOO_TICKERS: Record<string, string> = {
+/**
+ * Single source of truth for Yahoo Finance tickers, shared by the quote path AND the history
+ * path. Previously yahoo.ts kept its own copy that mapped XAGUSD to 'XAGUSD=X' while this one
+ * used 'SI=F' — the divergence meant silver *prices* came from COMEX futures while silver *candles*
+ * came from a spot symbol Yahoo does not publish (the README itself says so), so the chart and the
+ * paper-trade entry price were derived from two different instruments.
+ */
+export const YAHOO_SYMBOLS: Record<string, string> = {
   'EURUSD': 'EURUSD=X',
   'GBPUSD': 'GBPUSD=X',
   'USDJPY': 'USDJPY=X',
@@ -115,108 +123,111 @@ const YAHOO_TICKERS: Record<string, string> = {
   'XAGUSD': 'SI=F',
 };
 
-async function fetchYahooBatch(symbols: string[]): Promise<Record<string, any> | null> {
-  // Use the v7 quote endpoint for batch quotes — single HTTP call for all symbols.
-  const tickers = symbols.map((s) => YAHOO_TICKERS[s] || `${s}=X`).join(',');
-  const urls = [
-    `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(tickers)}&fields=regularMarketPrice,regularMarketDayHigh,regularMarketDayLow,regularMarketPreviousClose`,
-    `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(tickers)}&fields=regularMarketPrice,regularMarketDayHigh,regularMarketDayLow,regularMarketPreviousClose`,
-  ];
-  for (const url of urls) {
-    try {
-      const res = await fetchWithTimeout(url, { timeoutMs: 7000 });
-      if (!res.ok) continue;
-      const data = (await res.json()) as any;
-      const results = data?.quoteResponse?.result;
-      if (Array.isArray(results) && results.length > 0) {
-        const bySymbol: Record<string, any> = {};
-        for (const r of results) {
-          if (r?.symbol) bySymbol[r.symbol.toUpperCase()] = r;
+export function yahooTickerFor(symbol: string): string {
+  return YAHOO_SYMBOLS[symbol] || `${symbol}=X`;
+}
+
+/** Consecutive upstream failure cycles, used to throttle logs and back the caller off. */
+let yahooConsecutiveFailures = 0;
+let yahooFailureLogCount = 0;
+export function getYahooFailureStreak(): number { return yahooConsecutiveFailures; }
+
+export interface YahooPriceSyncResult {
+  attempted: number;
+  applied: number;
+  failed: number;
+}
+
+export async function fetchYahooPricesFor(items: typeof serverWatchlist): Promise<YahooPriceSyncResult> {
+
+  let failures = 0;
+  let applied = 0;
+  await Promise.all(
+    items.map(async (item) => {
+      try {
+        const ticker = yahooTickerFor(item.symbol);
+        const res = await fetchWithTimeout(
+          `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`,
+          { timeoutMs: 6000 }
+        );
+        if (res.ok) {
+          const data = (await res.json()) as any;
+          const result = data?.chart?.result?.[0];
+          const meta = result?.meta;
+          const currentPrice =
+            meta?.regularMarketPrice || result?.indicators?.quote?.[0]?.close?.filter((c: any) => c !== null).pop();
+          if (currentPrice) {
+            const config = PAIRS_CONFIG_WS[item.symbol];
+            item.price = parseFloat(currentPrice.toFixed(config.pipDecimal + 1));
+            item.high = parseFloat(
+              (meta?.high || Math.max(item.high, currentPrice)).toFixed(config.pipDecimal + 1)
+            );
+            item.low = parseFloat(
+              (meta?.low || (item.low > 0 ? Math.min(item.low, currentPrice) : currentPrice)).toFixed(
+                config.pipDecimal + 1
+              )
+            );
+            const prevClose = meta?.chartPreviousClose || currentPrice;
+            item.change = parseFloat((((currentPrice - prevClose) / prevClose) * 100).toFixed(2));
+            applied += 1;
+          }
         }
-        return bySymbol;
+      } catch (e) {
+        failures += 1;
+        // A dead upstream used to emit one full stack trace per symbol per tick (8 lines every
+        // 5s => ~28k lines during a 30-minute outage). Report the first failure of a streak,
+        // then sample so the operator sees it is still broken without drowning in it.
+        yahooFailureLogCount += 1;
+        if (yahooFailureLogCount === 1) {
+          error(`[Yahoo] price feed down; first failure (${item.symbol}):`, e);
+        } else if (yahooFailureLogCount % 12 === 0) {
+          warn(`[Yahoo] price feed still failing (${yahooFailureLogCount} consecutive symbol errors, streak #${yahooConsecutiveFailures + 1})`);
+        }
       }
-    } catch (e) {
-      warn('[Yahoo] batch quote fetch failed:', (e as Error).message);
-    }
+    })
+  );
+
+  if (failures === 0) {
+    if (yahooConsecutiveFailures > 0) log(`[Yahoo] price feed recovered after ${yahooConsecutiveFailures} failed cycle(s).`);
+    yahooConsecutiveFailures = 0;
+    yahooFailureLogCount = 0;
+  } else {
+    yahooConsecutiveFailures += 1;
   }
-  return null;
+
+  return { attempted: items.length, applied: applied, failed: failures };
 }
 
-/**
- * Fallback: fetch a single symbol's chart if batch endpoint is unavailable.
- */
-async function fetchYahooChartFallback(item: typeof serverWatchlist[number]) {
-  try {
-    const ticker = YAHOO_TICKERS[item.symbol] || `${item.symbol}=X`;
-    const res = await fetchWithTimeout(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&range=1d`,
-      { timeoutMs: 6000 }
-    );
-    if (!res.ok) return;
-    const data = (await res.json()) as any;
-    const result = data?.chart?.result?.[0];
-    const meta = result?.meta;
-    const currentPrice = meta?.regularMarketPrice || result?.indicators?.quote?.[0]?.close?.filter((c: any) => c !== null).pop();
-    if (currentPrice) applyYahooQuote(item, currentPrice, meta?.regularMarketDayHigh, meta?.regularMarketDayLow, meta?.chartPreviousClose || meta?.previousClose);
-  } catch (e) {
-    error(`Failed to fetch real price for ${item.symbol}:`, e);
-  }
+export interface FeedSyncSummary {
+  source: 'twelvedata' | 'yahoo';
+  attempted: number;
+  applied: number;
+  failed: number;
 }
 
-function applyYahooQuote(
-  item: typeof serverWatchlist[number],
-  price: number,
-  dayHigh?: number,
-  dayLow?: number,
-  prevClose?: number
-) {
-  const config = PAIRS_CONFIG_WS[item.symbol];
-  item.price = parseFloat(price.toFixed(config.pipDecimal + 1));
-  const h = dayHigh ?? Math.max(item.high || 0, price);
-  const l = dayLow ?? (item.low > 0 ? Math.min(item.low, price) : price);
-  item.high = parseFloat(h.toFixed(config.pipDecimal + 1));
-  item.low = parseFloat(l.toFixed(config.pipDecimal + 1));
-  const pc = prevClose && prevClose > 0 ? prevClose : price;
-  item.change = parseFloat((((price - pc) / pc) * 100).toFixed(2));
-}
-
-// Reverse map: Yahoo ticker -> our symbol
-const TICKER_TO_SYMBOL: Record<string, string> = Object.fromEntries(
-  Object.entries(YAHOO_TICKERS).map(([sym, ticker]) => [ticker.toUpperCase(), sym])
-);
-
-export async function fetchYahooPricesFor(items: typeof serverWatchlist) {
-  if (items.length === 0) return;
-  const batch = await fetchYahooBatch(items.map((i) => i.symbol));
-  if (batch) {
-    for (const item of items) {
-      const ticker = (YAHOO_TICKERS[item.symbol] || `${item.symbol}=X`).toUpperCase();
-      const r = batch[ticker];
-      if (r?.regularMarketPrice) {
-        applyYahooQuote(item, r.regularMarketPrice, r.regularMarketDayHigh, r.regularMarketDayLow, r.regularMarketPreviousClose);
-      } else {
-        // Fall back to per-symbol chart call for missing tickers
-        await fetchYahooChartFallback(item);
-      }
-    }
-    return;
-  }
-  // Batch endpoint failed; fall back to parallel chart fetches
-  warn('[Yahoo] batch endpoint unavailable; falling back to chart-per-symbol');
-  await Promise.all(items.map((item) => fetchYahooChartFallback(item)));
-}
-
-export async function fetchRealLatestPrices() {
+export async function fetchRealLatestPrices(): Promise<FeedSyncSummary> {
   const tdApiKey = getTdApiKey();
   if (tdApiKey) {
     const applied = await fetchTwelveDataQuotes();
     const remaining = serverWatchlist.filter((i) => !applied.has(i.symbol));
+    let yahoo = { attempted: 0, applied: 0, failed: 0 };
     if (remaining.length > 0) {
-      await fetchYahooPricesFor(remaining);
+      yahoo = await fetchYahooPricesFor(remaining);
     }
-    return;
+    return {
+      source: 'twelvedata',
+      attempted: serverWatchlist.length,
+      applied: applied.size + yahoo.applied,
+      failed: yahoo.failed,
+    };
   }
-  await fetchYahooPricesFor(serverWatchlist);
+  const yahoo = await fetchYahooPricesFor(serverWatchlist);
+  return { source: 'yahoo', attempted: yahoo.attempted, applied: yahoo.applied, failed: yahoo.failed };
+}
+
+/** Which primary feed the server is using — the client needs this to label its HUD honestly. */
+export function marketSource(): 'twelvedata' | 'yahoo' {
+  return getTdApiKey() ? 'twelvedata' : 'yahoo';
 }
 
 export function getQuoteSyncMs() {

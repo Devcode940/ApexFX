@@ -28,7 +28,6 @@ export const SubChartPanels: React.FC<SubChartPanelsProps> = ({
   theme,
   symbol,
   indicators,
-  onToggleIndicator,
   isRsiMinimized,
   setIsRsiMinimized,
   isMacdMinimized,

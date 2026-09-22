@@ -5,6 +5,11 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -22,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Gates below are deliberately NOT wrapped in `|| echo ...`.
+      # The previous CI ran `npm run lint:eslint || echo "eslint warnings"`, which turned a
+      # hard ESLint failure (v9 + .eslintrc.json = config not found) into a green checkmark.
       - name: Typecheck
         run: npm run typecheck
 
@@ -34,19 +42,65 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Docker build check
-        run: docker build -t apexfx:test .
+      - name: Smoke test the production bundle
+        # The build step only proves it compiles. This proves the built server actually boots,
+        # serves the SPA, and answers /api/health — the class of failure the broken logo
+        # and the missing-vite-in-prod-deps issue would have caught earlier.
+        run: |
+          PORT=3999 NODE_ENV=production node dist/server.cjs &
+          SRV=$!
+          for i in $(seq 1 30); do
+            curl -sf "http://127.0.0.1:3999/api/health" >/dev/null && break
+            sleep 1
+          done
+          curl -sf "http://127.0.0.1:3999/api/health" | grep -q '"status":"ok"'
+          # index.html must reference an asset that actually exists on disk
+          ASSET=$(curl -sf http://127.0.0.1:3999/ | grep -o '/assets/index-[^"]*\.js' | head -1)
+          test -n "$ASSET"
+          curl -sf -o /dev/null "http://127.0.0.1:3999$ASSET"
+          # unknown API paths must be JSON 404, never index.html 200
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3999/api/definitely-not-real)
+          test "$code" = "404"
+          kill $SRV
 
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-      - name: Install dependencies
-        run: npm ci
-      - name: Audit (non-blocking advisory report)
-        run: npm audit --audit-level=high || echo "::warning::npm audit reported advisories — review before release"
+
+      # Fails the build on high+ advisories. Previously `npm audit --audit-level=high || true`
+      # — with `|| true`, i.e. a report nobody was obliged to read.
+      - name: Audit
+        run: npm audit --audit-level=high
+
+      # Guards the class of mistake found in the audit: `.env` was not gitignored while README
+      # told users to put live keys in it, and a Firebase key was already committed.
+      - name: Secret scan (tracked files)
+        run: |
+          PATTERNS='AIza[0-9A-Za-z_-]{30,}|sk-or-v1-[0-9A-Za-z]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|github_pat_[0-9A-Za-z]{20,}|ghp_[0-9A-Za-z]{20,}'
+          if git ls-files | xargs -r grep -InE "$PATTERNS" --exclude='*.example' --exclude='.env.example' 2>/dev/null; then
+            echo "::error::candidate secret detected in tracked files (see lines above)"; exit 1
+          fi
+          if git ls-files | grep -qx '.env'; then
+            echo "::error::.env must never be tracked"; exit 1
+          fi
+          echo "secret scan clean"
+
+      - name: Verify .gitignore covers .env
+        run: grep -qx '.env' .gitignore
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker build
+        run: docker build -t apexfx:test .
+      - name: Container boots and answers healthcheck
+        run: |
+          docker run -d --rm --name apexfx-smoke -p 4000:3000 apexfx:test
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:4000/api/health >/dev/null && exit 0
+            sleep 2
+          done
+          docker logs apexfx-smoke
+          echo "::error::container never became healthy"; exit 1

@@ -3,8 +3,11 @@ import { Candlestick, Timeframe } from '../types';
 
 export function useChartHistory(selectedSymbol: string, selectedTimeframe: Timeframe) {
   const [chartData, setChartData] = useState<Record<string, Record<string, Candlestick[]>>>({});
-  // Track fetched pairs so we don't refire the effect due to chartData changes
-  const loadedKey = useRef<string>('');
+  // Every symbol/timeframe attempted, not just the most recent one: a single "last key" ref made
+  // EUR/USD -> GBP/USD -> EUR/USD re-fetch data already in state, and it forced chartData out of the
+  // dep array (a stale-closure smell the react-hooks rule rightly flags). A Set lets chartData be a
+  // dependency without the error path re-firing forever.
+  const loadedKeys = useRef<Set<string>>(new Set());
 
   const activeData = useMemo(() => {
     if (!chartData[selectedSymbol]?.[selectedTimeframe]) {
@@ -15,7 +18,8 @@ export function useChartHistory(selectedSymbol: string, selectedTimeframe: Timef
 
   useEffect(() => {
     const key = `${selectedSymbol}_${selectedTimeframe}`;
-    if (loadedKey.current === key) return;
+    if (loadedKeys.current.has(key)) return;
+    loadedKeys.current.add(key); // before any await: an attempt in flight must not re-enter
     let active = true;
     async function fetchHistory() {
       try {
@@ -40,7 +44,6 @@ export function useChartHistory(selectedSymbol: string, selectedTimeframe: Timef
             },
           }));
         }
-        loadedKey.current = key;
       } catch (err) {
         console.error('Failed to fetch historical data:', err);
         if (active) {
@@ -51,23 +54,22 @@ export function useChartHistory(selectedSymbol: string, selectedTimeframe: Timef
               [selectedTimeframe]: [],
             },
           }));
-          loadedKey.current = key;
         }
       }
     }
 
     // Load if we don't already have non-empty data for this key
+    // Only reached once per key (the Set guard above is the authority on "already attempted"), so this is
+    // a "do we already have data from an earlier mount" check and not a race.
     const existing = chartData[selectedSymbol]?.[selectedTimeframe];
     if (!existing || existing.length === 0) {
       fetchHistory();
-    } else {
-      loadedKey.current = key;
     }
 
     return () => {
       active = false;
     };
-  }, [selectedSymbol, selectedTimeframe]);
+  }, [selectedSymbol, selectedTimeframe, chartData]);
 
   return { chartData, setChartData, activeData };
 }
