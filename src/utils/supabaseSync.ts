@@ -1,3 +1,4 @@
+/** @deprecated Legacy row/archive helpers only. Live books MUST use ledger/cloudLedger (CAS, owner binding, closure and deletion tombstones). */
 import type { TradePosition, ClosedTrade } from '../types';
 import { priceDeltaToPips } from './pips';
 

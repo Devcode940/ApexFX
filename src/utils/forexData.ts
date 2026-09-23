@@ -1,23 +1,11 @@
 import { Candlestick, Timeframe, WatchlistItem, TechnicalIndicatorsState, Pattern, TradingSignal } from '../types';
 
-export const PAIRS_CONFIG: Record<string, { name: string; pipDecimal: number; spreadPips: number }> = {
-  'EURUSD': { name: 'EUR / USD', pipDecimal: 4, spreadPips: 1.2 },
-  'GBPUSD': { name: 'GBP / USD', pipDecimal: 4, spreadPips: 1.6 },
-  'USDJPY': { name: 'USD / JPY', pipDecimal: 2, spreadPips: 1.4 },
-  'AUDUSD': { name: 'AUD / USD', pipDecimal: 4, spreadPips: 1.5 },
-  'USDCAD': { name: 'USD / CAD', pipDecimal: 4, spreadPips: 1.8 },
-  'GBPJPY': { name: 'GBP / JPY', pipDecimal: 2, spreadPips: 2.3 },
-  'XAUUSD': { name: 'Gold / USD', pipDecimal: 2, spreadPips: 2.5 },
-  'XAGUSD': { name: 'Silver / USD', pipDecimal: 4, spreadPips: 2.0 } };
+import { INSTRUMENTS, isSymbol, EMPTY_QUOTE_METADATA } from '../../shared/market';
 
-// Contract size (base units per lot) per instrument. Forex standard lot = 100,000 units;
-// Gold = 100 troy oz per lot, Silver = 5,000 troy oz per lot.
-export const CONTRACT_SIZE: Record<string, number> = {
-  'XAUUSD': 100,
-  'XAGUSD': 5000 };
-
+export const PAIRS_CONFIG: Record<string, (typeof INSTRUMENTS)[keyof typeof INSTRUMENTS]> = INSTRUMENTS;
+export const CONTRACT_SIZE: Record<string, number> = Object.fromEntries(Object.entries(INSTRUMENTS).map(([s, c]) => [s, c.contractSize]));
 export function getContractSize(symbol: string): number {
-  return CONTRACT_SIZE[symbol] || 100000;
+  return isSymbol(symbol) ? INSTRUMENTS[symbol].contractSize : 100000;
 }
 
 export function getDecimalCount(symbol: string): number {
@@ -32,13 +20,7 @@ export function formatPrice(price: number, symbol: string): string {
   return price.toFixed(decimals);
 }
 
-export const TIME_CONFIG: Record<Timeframe, { label: string; offsetSec: number }> = {
-  '1m': { label: '1 Minute', offsetSec: 60 },
-  '5m': { label: '5 Minutes', offsetSec: 300 },
-  '15m': { label: '15 Minutes', offsetSec: 900 },
-  '1H': { label: '1 Hour', offsetSec: 3600 },
-  '4H': { label: '4 Hours', offsetSec: 14400 },
-  'D': { label: '1 Day', offsetSec: 86400 } };
+export { TIME_CONFIG } from '../../shared/timeframes';
 
 // Indicator computations
 export function computeSMA(data: Candlestick[], period = 20): (number | null)[] {
@@ -249,7 +231,7 @@ export function computeFibonacci(data: Candlestick[]) {
 
 export function computeATR(data: Candlestick[], period = 14): (number | null)[] {
   const atr: (number | null)[] = Array(data.length).fill(null);
-  if (data.length <= period) {
+  if (data.length < period) {
     return atr;
   }
   
@@ -349,29 +331,20 @@ export function calculateVolatilityDetails(data: Candlestick[], symbol: string):
   };
 }
 
-// Candlestick Pattern Identifier with advanced Profitability Auto-Scanner
+// Causal candlestick pattern scanner with unvalidated confluence ranking
 export function detectPatterns(data: Candlestick[]): Pattern[] {
   const patterns: Pattern[] = [];
   if (data.length < 5) return patterns;
 
-  // Pre-calculate indicators for confirming profitability of formations
+  // Pre-calculate indicators for heuristic confluence of formations
   const rsi = computeRSI(data, 14);
   const ema50 = computeEMA(data, 50);
   const bb = computeBollingerBands(data, 20, 2);
 
-  // Calculate volume context
-  let totalVolume = 0;
-  let volumeCount = 0;
-  for (let j = 0; j < data.length; j++) {
-    if (data[j].volume) {
-      totalVolume += data[j].volume!;
-      volumeCount++;
-    }
-  }
-  const avgVolume = volumeCount > 0 ? totalVolume / volumeCount : 1;
-
   for (let i = 2; i < data.length; i++) {
     const c = data[i];
+    const precedingVolumes = data.slice(Math.max(0, i - 20), i).map(bar => bar.volume ?? 0).filter(v => v > 0);
+    const avgVolume = precedingVolumes.length ? precedingVolumes.reduce((a, b) => a + b, 0) / precedingVolumes.length : Infinity;
     const p = data[i - 1];
     const pp = data[i - 2];
 
@@ -385,7 +358,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
     const lowerWick = Math.min(c.open, c.close) - c.low;
     const upperWick = c.high - Math.max(c.open, c.close);
 
-    let pat: Omit<Pattern, 'winRate' | 'reliability' | 'volumeConfirm' | 'score' | 'indicatorsConfirm'> | null = null;
+    let pat: Omit<Pattern, 'confluence' | 'reliability' | 'volumeConfirm' | 'score' | 'indicatorsConfirm'> | null = null;
 
     // Stable ID using candle time + pattern name so markers don't shift on re-render
     const idBase = `${c.time}_`;
@@ -464,7 +437,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
 
     if (pat) {
       // Calculate context-driven profitability metrics
-      let baseWinRate = 50;
+      let baseConfluence = 50;
       let indicatorsConfirm: string[] = [];
       let volumeConfirm = false;
 
@@ -474,88 +447,88 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
       const bbLower = bb.lower[i];
 
       if (pat.type === 'bullish') {
-        baseWinRate = pat.name === 'Morning Star' ? 71 : pat.name === 'Bullish Engulfing' ? 68 : 64;
+        baseConfluence = pat.name === 'Morning Star' ? 71 : pat.name === 'Bullish Engulfing' ? 68 : 64;
 
         if (currentRsi !== null && currentRsi !== undefined) {
           if (currentRsi < 35) {
-            baseWinRate += 12;
+            baseConfluence += 12;
             indicatorsConfirm.push('RSI Oversold Support');
           } else if (currentRsi > 65) {
-            baseWinRate -= 10;
+            baseConfluence -= 10;
           } else if (currentRsi > 50) {
-            baseWinRate += 4;
+            baseConfluence += 4;
             indicatorsConfirm.push('RSI Positive Momentum');
           }
         }
 
         if (bbLower !== null && bbLower !== undefined && bbUpper !== null && bbUpper !== undefined && c.close <= bbLower + (bbUpper - bbLower) * 0.15) {
-          baseWinRate += 8;
+          baseConfluence += 8;
           indicatorsConfirm.push('Lower BB Channel Bounce');
         }
 
         if (currentEma !== null && currentEma !== undefined && c.close > currentEma) {
-          baseWinRate += 6;
+          baseConfluence += 6;
           indicatorsConfirm.push('Above EMA 50 Trend Support');
         }
 
         if (c.volume && c.volume > avgVolume * 1.15) {
-          baseWinRate += 5;
+          baseConfluence += 5;
           volumeConfirm = true;
           indicatorsConfirm.push('High Volume Confirmation');
         }
       } else if (pat.type === 'bearish') {
-        baseWinRate = pat.name === 'Evening Star' ? 72 : pat.name === 'Bearish Engulfing' ? 69 : 65;
+        baseConfluence = pat.name === 'Evening Star' ? 72 : pat.name === 'Bearish Engulfing' ? 69 : 65;
 
         if (currentRsi !== null && currentRsi !== undefined) {
           if (currentRsi > 65) {
-            baseWinRate += 12;
+            baseConfluence += 12;
             indicatorsConfirm.push('RSI Overbought Resistance');
           } else if (currentRsi < 35) {
-            baseWinRate -= 10;
+            baseConfluence -= 10;
           } else if (currentRsi < 50) {
-            baseWinRate += 4;
+            baseConfluence += 4;
             indicatorsConfirm.push('RSI Downward Momentum');
           }
         }
 
         if (bbUpper !== null && bbUpper !== undefined && bbLower !== null && bbLower !== undefined && c.close >= bbUpper - (bbUpper - bbLower) * 0.15) {
-          baseWinRate += 8;
+          baseConfluence += 8;
           indicatorsConfirm.push('Upper BB Channel Rejection');
         }
 
         if (currentEma !== null && currentEma !== undefined && c.close < currentEma) {
-          baseWinRate += 6;
+          baseConfluence += 6;
           indicatorsConfirm.push('Below EMA 50 Trend Resistance');
         }
 
         if (c.volume && c.volume > avgVolume * 1.15) {
-          baseWinRate += 5;
+          baseConfluence += 5;
           volumeConfirm = true;
           indicatorsConfirm.push('High Volume Confirmation');
         }
       } else {
         // neutral/Doji
-        baseWinRate = 50;
+        baseConfluence = 50;
         if (currentRsi !== null && currentRsi !== undefined && (currentRsi < 30 || currentRsi > 70)) {
-          baseWinRate += 8;
+          baseConfluence += 8;
           indicatorsConfirm.push('Extreme RSI Reversal Climax');
         }
       }
 
       // Final limits and formatting
-      const winRate = Math.min(89, Math.max(38, baseWinRate));
-      const reliability = winRate > 75 ? 'High' : winRate >= 64 ? 'Medium' : 'Low';
-      // (Removed 2026-09-16: `profitFactor = 1.1 + (winRate - 45) * 0.025`.) A profit factor is
+      const confluence = Math.min(89, Math.max(38, baseConfluence));
+      const reliability = confluence > 75 ? 'High' : confluence >= 64 ? 'Medium' : 'Low';
+      // (Removed 2026-09-16: `profitFactor = 1.1 + (confluence - 45) * 0.025`.) A profit factor is
       // grossProfit / grossLoss and requires knowing the size of the winning and losing moves - which
       // pattern detection from candle geometry does not have. Deriving it from the win rate produced a
       // monotone re-labelling of a number displayed right next to it, rendered with 2 decimals as
       // "1.10x", i.e. shaped exactly like a backtested statistic. The real one lives in
       // PerformanceDashboard (computed from the closed-trade ledger); do not re-add a second, fake one.
-      const score = Math.round(winRate * (volumeConfirm ? 1.05 : 1.0) * (reliability === 'High' ? 1.1 : 1.0));
+      const score = Math.round(confluence * (volumeConfirm ? 1.05 : 1.0) * (reliability === 'High' ? 1.1 : 1.0));
 
       patterns.push({
         ...pat,
-        winRate,
+        confluence,
         reliability,
         volumeConfirm,
         score,
@@ -572,10 +545,10 @@ export function generateSignal(
   symbol: string,
   timeframe: Timeframe,
   data: Candlestick[],
-  indicators: TechnicalIndicatorsState,
+  _indicators: TechnicalIndicatorsState,
   precomputedPatterns?: Pattern[]
 ): TradingSignal {
-  const currentPrice = data[data.length - 1]?.close || 1.0;
+  const currentPrice = data[data.length - 1]?.close || 0;
   const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
 
   if (data.length === 0) {
@@ -590,7 +563,7 @@ export function generateSignal(
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       rationale: ['Loading market data...'],
       breakdown: [],
-      disclaimer: 'Heuristic estimate — not financial advice. Pattern win rates are not backtested.' };
+      disclaimer: 'Heuristic estimate — not financial advice. Confluence scores are not probabilities.' };
   }
 
   const sma = computeSMA(data, 20);
@@ -659,7 +632,7 @@ export function generateSignal(
     const positionPct = (currentPrice - latestBbLower) / (channelSize || 1);
     if (positionPct < 0.1) {
       buyScore += 15;
-      rationale.push(`Price is pressing against the Lower Bollinger Band context (${latestBbLower.toFixed(4)}). Historically a high-probability zone for immediate buyback reactions.`);
+      rationale.push(`Price is pressing against the Lower Bollinger Band context (${latestBbLower.toFixed(4)}). A possible mean-reversion context; no historical win probability has been established.`);
       breakdown.push({ name: 'Volatility Channels (Bollinger)', status: 'bullish', detail: `Near lower band ${latestBbLower.toFixed(4)}` });
     } else if (positionPct > 0.9) {
       buyScore -= 15;
@@ -700,12 +673,12 @@ export function generateSignal(
     recentPatterns.forEach((pat) => {
       if (pat.type === 'bullish') {
         buyScore += 15;
-        rationale.push(`Spotted a bullish **${pat.name}** pattern recently. This gives a reliable technical anchor to enter long positions.`);
-        breakdown.push({ name: `Pattern: ${pat.name}`, status: 'bullish', detail: `Win rate est. ${pat.winRate || 60}%` });
+        rationale.push(`Spotted a bullish **${pat.name}** pattern recently. This contributes a heuristic bullish signal, not a validated entry guarantee.`);
+        breakdown.push({ name: `Pattern: ${pat.name}`, status: 'bullish', detail: `Confluence score ${pat.confluence || 60}/100` });
       } else if (pat.type === 'bearish') {
         buyScore -= 15;
         rationale.push(`Spotted a bearish **${pat.name}** pattern recently. Warns of active distribution and recommends moving stops upwards.`);
-        breakdown.push({ name: `Pattern: ${pat.name}`, status: 'bearish', detail: `Win rate est. ${pat.winRate || 60}%` });
+        breakdown.push({ name: `Pattern: ${pat.name}`, status: 'bearish', detail: `Confluence score ${pat.confluence || 60}/100` });
       } else {
         rationale.push(`Found a neutral **${pat.name}** candlestick formation. Indicates minor consolidating behavior.`);
         breakdown.push({ name: `Pattern: ${pat.name}`, status: 'neutral', detail: `Neutral formation` });
@@ -763,7 +736,7 @@ export function generateSignal(
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     rationale: rationale.length > 0 ? rationale : ['Market is moving sideways near global anchors. No extreme indicator divergence is seen. Wait for breakout.'],
     breakdown,
-    disclaimer: 'Experimental heuristic — not financial advice. Pattern win rates are estimates, not backtested guarantees.' };
+    disclaimer: 'Experimental heuristic — not financial advice. Confluence scores are heuristics, not probabilities or backtested results.' };
 }
 
 // Watchlist default creation. Prices are zeroed until the live feed delivers
@@ -778,7 +751,7 @@ export function createWatchlistFromConfig(): WatchlistItem[] {
       high: 0,
       low: 0,
       change: 0,
-      spread: config.spreadPips };
+      spread: config.spreadPips, ...EMPTY_QUOTE_METADATA };
   });
 }
 

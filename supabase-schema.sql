@@ -1,3 +1,5 @@
+-- LEGACY schema/archive reference. New installations and upgrades: use supabase/migrations/20260923_paper_books.sql.
+-- Read DEPLOYMENT.md before running any SQL; do not rerun historical data-rewrite blocks as a v2 migration.
 -- SUPABASE DATABASE SCHEMA & POLICIES
 -- Copy and run this in your Supabase SQL Editor (https://supabase.com)
 

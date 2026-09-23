@@ -151,7 +151,8 @@ export function generateSessionBlocks(
   timeframe: Timeframe,
   enabledSessions: Record<ForexSessionKey, boolean>
 ): SessionBlock[] {
-  if (!data || data.length === 0) return [];
+  // An intraday session cannot be identified from the opening timestamp of a daily/weekly bar.
+  if (!data || data.length === 0 || timeframe === 'D' || timeframe === 'W') return [];
   const timeOffset = TIME_CONFIG[timeframe]?.offsetSec || 3600;
   const blocks: SessionBlock[] = [];
 

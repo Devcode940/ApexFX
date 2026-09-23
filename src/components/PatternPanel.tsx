@@ -11,19 +11,19 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
     highlightedPattern,
     setHighlightedPattern: onHighlightPattern,
   } = useTrading();
-  const [filterType, setFilterType] = useState<'all' | 'profitable'>('all');
-  const [sortBy, setSortBy] = useState<'chronological' | 'profitability'>('profitability');
+  const [filterType, setFilterType] = useState<'all' | 'confluence'>('all');
+  const [sortBy, setSortBy] = useState<'chronological' | 'confluence'>('confluence');
 
   // Filter and Sort the patterns
   let processedPatterns = [...patterns];
 
-  if (filterType === 'profitable') {
-    // Only show patterns with winRate >= 65% or Reliability Medium/High
-    processedPatterns = processedPatterns.filter(p => (p.winRate || 50) >= 65);
+  if (filterType === 'confluence') {
+    // Only show patterns with confluence >= 65/100
+    processedPatterns = processedPatterns.filter(p => (p.confluence || 50) >= 65);
   }
 
-  if (sortBy === 'profitability') {
-    // Sort descending by winRate/score
+  if (sortBy === 'confluence') {
+    // Sort descending by confluence/score
     processedPatterns.sort((a, b) => (b.score || 0) - (a.score || 0));
   } else {
     // Chronological (latest first)
@@ -41,7 +41,7 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-emerald-400 animate-pulse" />
             <h2 className="font-display font-semibold text-sm tracking-wide uppercase text-zinc-200">
-              Profitable Patterns Scanner
+              Candlestick Confluence Scanner
             </h2>
           </div>
           <span className="text-[9px] bg-emerald-950/50 text-emerald-400 font-mono px-2 py-0.5 rounded border border-emerald-900/30 font-bold uppercase tracking-wider flex items-center gap-1">
@@ -64,14 +64,14 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
               All ({patterns.length})
             </button>
             <button
-              onClick={() => setFilterType('profitable')}
+              onClick={() => setFilterType('confluence')}
               className={`px-2 py-1 rounded transition-colors cursor-pointer flex items-center gap-1 ${
-                filterType === 'profitable'
+                filterType === 'confluence'
                   ? 'bg-emerald-950/65 text-emerald-400 font-bold border border-emerald-900/40'
                   : 'text-zinc-500 hover:text-emerald-500'
               }`}
             >
-              High Probability ({patterns.filter(p => (p.winRate || 0) >= 65).length})
+              High Confluence ({patterns.filter(p => (p.confluence || 0) >= 65).length})
             </button>
           </div>
 
@@ -82,7 +82,7 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
               onChange={(e) => setSortBy(e.target.value as any)}
               className="bg-zinc-950 border border-zinc-800 text-zinc-300 rounded px-1.5 py-0.5 focus:outline-none focus:border-zinc-700 text-[10px]"
             >
-              <option value="profitability">Win Rate %</option>
+              <option value="confluence">Confluence Score</option>
               <option value="chronological">Recent</option>
             </select>
           </div>
@@ -97,9 +97,9 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
               <RefreshCw className="w-6 h-6 animate-spin" style={{ animationDuration: '3s' }} />
             </div>
             <p className="text-zinc-500 text-xs font-mono max-w-xs leading-relaxed">
-              {filterType === 'profitable'
-                ? 'No high-probability setups scanned in this historical range. Lower filter thresholds to scan all.'
-                : 'Analyzing historical candlesticks... Scanning current active market ranges for profitable triggers.'}
+              {filterType === 'confluence'
+                ? 'No high-confluence setups scanned in this historical range. Lower filter thresholds to scan all.'
+                : 'Analyzing historical candlesticks... Scanning current active market ranges for heuristic formations.'}
             </p>
           </div>
         ) : (
@@ -118,7 +118,7 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
                 if (isBullish) sentimentBadge = 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/30';
                 if (isBearish) sentimentBadge = 'bg-rose-950/40 text-rose-400 border border-rose-900/30';
 
-                const winRate = pat.winRate || 50;
+                const confluence = pat.confluence || 50;
                 const reliability = pat.reliability || 'Low';
 
                 let reliabilityColor = 'text-zinc-400 border-zinc-800 bg-zinc-900/40';
@@ -134,12 +134,12 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
                         : 'bg-zinc-900/20 border-zinc-800/80 hover:border-zinc-700/60'
                     }`}
                   >
-                    {/* Top row: Name, type badge and visual accuracy score */}
+                    {/* Top row: Name, type badge and heuristic score */}
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="space-y-1 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="font-display font-bold text-xs text-zinc-100 flex items-center gap-1">
-                            {winRate >= 75 && <Award className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                            {confluence >= 75 && <Award className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
                             {pat.name}
                           </span>
                           <span className={`text-[8px] uppercase font-bold px-1.5 py-0.5 rounded leading-none ${sentimentBadge}`}>
@@ -172,15 +172,15 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
                         on 2026-09-16 because it was derived from win rate rather than measured. */}
                     <div className="grid grid-cols-2 gap-1.5 bg-zinc-950/60 p-2 rounded-lg border border-zinc-900 text-center font-mono my-2">
                       <div className="flex flex-col justify-center border-r border-zinc-900">
-                        <span className="text-[8px] text-zinc-500 uppercase leading-none">Est. Win Rate</span>
+                        <span className="text-[8px] text-zinc-500 uppercase leading-none">Confluence Score</span>
                         <span className={`text-xs font-extrabold mt-0.5 ${
-                          winRate >= 72 ? 'text-emerald-400' : winRate >= 64 ? 'text-amber-400' : 'text-zinc-400'
+                          confluence >= 72 ? 'text-emerald-400' : confluence >= 64 ? 'text-amber-400' : 'text-zinc-400'
                         }`}>
-                          {winRate}%
+                          {confluence}/100
                         </span>
                       </div>
                       <div className="flex flex-col justify-center">
-                        <span className="text-[8px] text-zinc-500 uppercase leading-none">Reliability</span>
+                        <span className="text-[8px] text-zinc-500 uppercase leading-none">Heuristic tier</span>
                         <span className={`text-[9px] font-bold uppercase mt-0.5 tracking-wider px-1 py-0.2 rounded ${reliabilityColor}`}>
                           {reliability}
                         </span>
@@ -225,10 +225,10 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
       <div className="p-3 bg-zinc-900/45 border-t border-zinc-800 text-[10px] text-zinc-500 font-mono space-y-1">
         <div className="flex items-center justify-between">
           <span>Confluence Scan: active</span>
-          <span>Min threshold: 50% WR (est.)</span>
+          <span>Heuristic scores — not win probabilities</span>
         </div>
         <div className="text-[9px] leading-snug text-zinc-500/80">
-          ⚠️ Win rates & profit factors are heuristic estimates, not backtested guarantees — not financial advice.
+          ⚠️ Confluence scores are unvalidated heuristics, not win probabilities — not financial advice.
         </div>
       </div>
     </div>

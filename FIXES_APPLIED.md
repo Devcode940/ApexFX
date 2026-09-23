@@ -1,3 +1,5 @@
+> Historical notes — not current verification or deployment instructions. See [IMPLEMENTATION-2026-09-23.md](IMPLEMENTATION-2026-09-23.md) and [DEPLOYMENT.md](DEPLOYMENT.md) for the current changes and remaining gates.
+
 # Hardening Log — what changed, and how each claim is proved
 
 > **Why this file was rewritten (2026-09-13).** The previous version listed 16 "fixes" and a

@@ -56,7 +56,7 @@ export function pipValueUsd(
   symbol: string,
   lots = 1,
   fx: { usdPerQuote?: number } = {}
-): number {
+): number | null {
   const size = pipSize(symbol);
   const contract = getContractSize(symbol);
   const valueInQuote = size * contract * lots;   // e.g. EUR/USD: 0.0001 * 100000 = $10 per standard lot
@@ -67,10 +67,8 @@ export function pipValueUsd(
   const rate = fx.usdPerQuote;
   if (Number.isFinite(rate) && (rate as number) > 0) return round2(valueInQuote / (rate as number));
 
-  // No rate available: return the quote-currency amount rather than inventing a USD figure. Callers
-  // that show this next to a lot-size suggestion should treat it as approximate (the panel only
-  // reaches here while the feed is cold, when orders are disabled anyway).
-  return round2(valueInQuote);
+  // Missing FX is not USD zero, nor a quote-currency amount masquerading as dollars.
+  return null;
 }
 
 /**

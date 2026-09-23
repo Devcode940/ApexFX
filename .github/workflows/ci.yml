@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: 'npm'
 
       - name: Install dependencies
@@ -42,31 +42,18 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Smoke test the production bundle
-        # The build step only proves it compiles. This proves the built server actually boots,
-        # serves the SPA, and answers /api/health — the class of failure the broken logo
-        # and the missing-vite-in-prod-deps issue would have caught earlier.
-        run: |
-          PORT=3999 NODE_ENV=production node dist/server.cjs &
-          SRV=$!
-          for i in $(seq 1 30); do
-            curl -sf "http://127.0.0.1:3999/api/health" >/dev/null && break
-            sleep 1
-          done
-          curl -sf "http://127.0.0.1:3999/api/health" | grep -q '"status":"ok"'
-          # index.html must reference an asset that actually exists on disk
-          ASSET=$(curl -sf http://127.0.0.1:3999/ | grep -o '/assets/index-[^"]*\.js' | head -1)
-          test -n "$ASSET"
-          curl -sf -o /dev/null "http://127.0.0.1:3999$ASSET"
-          # unknown API paths must be JSON 404, never index.html 200
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3999/api/definitely-not-real)
-          test "$code" = "404"
-          kill $SRV
+      - name: Deterministic production smoke (no live providers)
+        run: npm run test:smoke
 
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       # Fails the build on high+ advisories. Previously `npm audit --audit-level=high || true`
       # — with `|| true`, i.e. a report nobody was obliged to read.
@@ -97,9 +84,10 @@ jobs:
         run: docker build -t apexfx:test .
       - name: Container boots and answers healthcheck
         run: |
-          docker run -d --rm --name apexfx-smoke -p 4000:3000 apexfx:test
+          docker run -d --rm --name apexfx-smoke -e MARKET_DATA_MODE=offline -p 4000:3000 apexfx:test
+          trap 'docker rm -f apexfx-smoke >/dev/null 2>&1 || true' EXIT
           for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:4000/api/health >/dev/null && exit 0
+            curl -sf http://127.0.0.1:4000/api/live >/dev/null && exit 0
             sleep 2
           done
           docker logs apexfx-smoke

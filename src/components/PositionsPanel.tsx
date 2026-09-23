@@ -7,7 +7,12 @@ import { levelToPips, pipValueUsd, priceOf, usdJpyFrom, usdPerQuoteRate } from '
 
 import { useTrading } from '../context/TradingContext';
 
+import { hasAccountPnl, formatPnl } from '../utils/money';
+import { downloadTradesCsv } from '../utils/csv';
+import { isExecutableQuote, quoteQuality } from '../../shared/market';
 import { PerformanceDashboard } from './PerformanceDashboard';
+
+function safePreference(key: string) { try { return localStorage.getItem(key); } catch { return null; } }
 
 export const PositionsPanel: React.FC = () => {
   const {
@@ -20,6 +25,11 @@ export const PositionsPanel: React.FC = () => {
     handleOpenPosition: onOpenPosition,
     handleClosePosition: onClosePosition,
     watchlistItems,
+    canTrade,
+    storageError,
+    account,
+    historyMeta,
+    liveQuote,
   } = useTrading();
   const [activeTab, setActiveTab] = useState<'positions' | 'history' | 'analytics'>('positions');
   const [amount, setAmount] = useState<number>(0.1); // lot size
@@ -47,32 +57,32 @@ export const PositionsPanel: React.FC = () => {
   // --- Position Size Calculator State ---
   const [showCalculator, setShowCalculator] = useState<boolean>(false);
   const [balance, setBalance] = useState<number>(() => {
-    const cached = localStorage.getItem('forexinsight_calc_balance');
+    const cached = safePreference('forexinsight_calc_balance');
     const parsed = cached ? parseFloat(cached) : NaN;
     return !isNaN(parsed) ? parsed : 10000;
   });
   const [riskPercent, setRiskPercent] = useState<number>(() => {
-    const cached = localStorage.getItem('forexinsight_calc_risk_percent');
+    const cached = safePreference('forexinsight_calc_risk_percent');
     const parsed = cached ? parseFloat(cached) : NaN;
     return !isNaN(parsed) ? parsed : 1.0;
   });
   const [manualSlPips, setManualSlPips] = useState<number>(() => {
-    const cached = localStorage.getItem('forexinsight_calc_manual_sl_pips');
+    const cached = safePreference('forexinsight_calc_manual_sl_pips');
     const parsed = cached ? parseInt(cached) : NaN;
     return !isNaN(parsed) ? parsed : 50;
   });
 
   // --- Sync Calculator settings to LocalStorage ---
   useEffect(() => {
-    localStorage.setItem('forexinsight_calc_balance', balance.toString());
+    try { localStorage.setItem('forexinsight_calc_balance', balance.toString()); } catch { /* non-critical preference */ }
   }, [balance]);
 
   useEffect(() => {
-    localStorage.setItem('forexinsight_calc_risk_percent', riskPercent.toString());
+    try { localStorage.setItem('forexinsight_calc_risk_percent', riskPercent.toString()); } catch { /* non-critical preference */ }
   }, [riskPercent]);
 
   useEffect(() => {
-    localStorage.setItem('forexinsight_calc_manual_sl_pips', manualSlPips.toString());
+    try { localStorage.setItem('forexinsight_calc_manual_sl_pips', manualSlPips.toString()); } catch { /* non-critical preference */ }
   }, [manualSlPips]);
 
   // Pip size and pip value now come from utils/pips, which derives both from PAIRS_CONFIG +
@@ -81,8 +91,9 @@ export const PositionsPanel: React.FC = () => {
   // pips were counted at 0.0001 while a pip was valued at $5 (the 0.001-pip convention), so the
   // risk sizing below under-sized XAG positions by 10x. Changing the convention in ONE place
   // (PAIRS_CONFIG.pipDecimal) now changes both consistently.
-  const usdJpy = usdJpyFrom(watchlistItems);
-  const usdPerQuote = usdPerQuoteRate(selectedSymbol, priceOf(selectedSymbol, watchlistItems), usdJpy);
+  const freshQuotes = watchlistItems.filter(q => isExecutableQuote(q));
+  const usdJpy = usdJpyFrom(freshQuotes);
+  const usdPerQuote = usdPerQuoteRate(selectedSymbol, priceOf(selectedSymbol, freshQuotes), usdJpy);
 
   /**
    * Levels to inherit from the signal when the operator left the inputs empty.
@@ -94,7 +105,7 @@ export const PositionsPanel: React.FC = () => {
    * order died with a confusing message), and — before that — one that silently could never trigger.
    * The panel already refused to *auto-fill* a NEUTRAL signal; the fallback path just never got the memo.
    */
-  const usableLevels = activeSignal && activeSignal.type !== 'NEUTRAL';
+  const usableLevels = activeSignal && activeSignal.type !== 'NEUTRAL' && historyMeta?.instrumentKind === liveQuote?.instrumentKind && historyMeta?.provider === liveQuote?.source && historyMeta?.providerSymbol === liveQuote?.providerSymbol && canTrade;
   const suggestedSl = usableLevels && activeSignal.sl > 0 ? activeSignal.sl : undefined;
   const suggestedTp = usableLevels && activeSignal.tp > 0 ? activeSignal.tp : undefined;
 
@@ -114,10 +125,10 @@ export const PositionsPanel: React.FC = () => {
 
   const activeSlInfo = getActiveSlPips();
   const riskAmount = (balance * riskPercent) / 100;
-  // Live USD/JPY when the feed has it (falls back to the quote-currency amount, see utils/pips).
+  // Only fresh conversion quotes may produce a USD risk/lot-size suggestion.
   const pipValue = pipValueUsd(selectedSymbol, 1, { usdPerQuote });
-  const suggestedLotSizeRaw = activeSlInfo.pips > 0 ? (riskAmount / (activeSlInfo.pips * pipValue)) : 0.1;
-  const suggestedLotSize = parseFloat(Math.max(0.01, Math.min(100.0, suggestedLotSizeRaw)).toFixed(2));
+  const suggestedLotSizeRaw = activeSlInfo.pips > 0 && pipValue !== null ? (riskAmount / (activeSlInfo.pips * pipValue)) : 0;
+  const suggestedLotSize = Number.isFinite(suggestedLotSizeRaw) && suggestedLotSizeRaw >= 0.01 ? Math.floor(Math.min(MAX_LOTS, suggestedLotSizeRaw) * 100) / 100 : null;
 
   useEffect(() => {
     if (positions.length === 0) {
@@ -129,7 +140,8 @@ export const PositionsPanel: React.FC = () => {
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const dateStr = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     const fullTimeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-    const currentTotal = parseFloat(positions.reduce((acc, pos) => acc + pos.pnl, 0).toFixed(2));
+    if (positions.some(p => !hasAccountPnl(p))) return; // no unknown mark/FX coerced into an equity sample
+    const currentTotal = parseFloat(positions.filter(hasAccountPnl).reduce((acc, pos) => acc + pos.pnl, 0).toFixed(2));
 
     setPnlHistory((prev) => {
       const lastItem = prev[prev.length - 1];
@@ -150,8 +162,7 @@ export const PositionsPanel: React.FC = () => {
   // the order too, but the panel must say so: previously a click here booked an entry at 0.00 and
   // P&L then rendered as (livePrice - 0) * lots * contractSize — ~+$108k of phantom profit for
   // one EUR/USD lot.
-  const hasLivePrice = Number.isFinite(currentPrice) && currentPrice > 0;
-  const canTrade = hasLivePrice;
+  const hasLivePrice = canTrade;
 
   const handleOpenMarketOrder = (type: 'BUY' | 'SELL') => {
     setErrorText('');
@@ -228,52 +239,9 @@ export const PositionsPanel: React.FC = () => {
     setErrorText('');
   };
 
-  // --- Export Closed Trades History to CSV ---
-  const handleExportCSV = () => {
-    if (closedTrades.length === 0) return;
+  const handleExportCSV = () => downloadTradesCsv(closedTrades, `apexfx_trade_history_${new Date().toISOString().slice(0, 10)}.csv`);
 
-    const headers = [
-      'Trade ID',
-      'Symbol',
-      'Type',
-      'Lot Size',
-      'Entry Price',
-      'Exit Price',
-      'Realized PnL ($)',
-      'Close Reason',
-      'Execution Time'
-    ];
-
-    const rows = closedTrades.map((trade) => [
-      trade.id,
-      trade.symbol,
-      trade.type,
-      trade.amount.toFixed(2),
-      formatPrice(trade.entryPrice, trade.symbol),
-      formatPrice(trade.exitPrice, trade.symbol),
-      trade.pnl.toFixed(2),
-      trade.closeReason || 'Manual',
-      `"${trade.time}"`
-    ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map((row) => row.join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const timestamp = new Date().toISOString().slice(0, 10);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `apexfx_trade_history_${timestamp}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const totalPnL = positions.reduce((acc, pos) => acc + pos.pnl, 0);
+  const totalPnL = positions.filter(hasAccountPnl).reduce((acc, pos) => acc + pos.pnl, 0);
 
   return (
     <div className="flex flex-col bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden h-full" id="positions_component">
@@ -288,11 +256,15 @@ export const PositionsPanel: React.FC = () => {
         <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${
           totalPnL >= 0 ? 'bg-emerald-950/40 text-emerald-400' : 'bg-red-950/40 text-red-500'
         }`}>
-          PnL: {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+          Known USD PnL: {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
         </span>
       </div>
 
       <div className="p-4 flex-1 overflow-y-auto space-y-4">
+        <p className="text-[11px] text-zinc-400">{account.session ? 'Account' : 'Guest'} book · observed-quote simulator. Tiingo fills use midpoint (not bid/ask). Stops fill at the observed adverse gap price; targets at their limit. No spread, fees, or closed-app execution.</p>
+        {storageError && <p role="alert" className="text-xs text-amber-400">{storageError}</p>}
+        {positions.some(p => !hasAccountPnl(p)) && <p role="status" className="text-xs text-amber-400">USD totals exclude positions with unavailable marks or currency conversion. Their quote-currency P&amp;L is shown separately.</p>}
+        {!canTrade && <p role="status" className="text-xs text-amber-400">Orders require a loaded book and a fresh, timestamped spot quote. History/reference/futures-proxy prices cannot execute.</p>}
         {/* Instant Market Order execution card */}
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3.5 space-y-3">
           <div className="flex justify-between items-center">
@@ -307,7 +279,7 @@ export const PositionsPanel: React.FC = () => {
                 type="number"
                 step="0.01"
                 min="0.01"
-                max="10.0"
+                max={MAX_LOTS}
                 value={amount}
                 onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
                 className="w-full bg-zinc-950 text-xs font-mono border border-zinc-800 focus:border-zinc-700 outline-none rounded p-2 text-zinc-200 font-medium"
@@ -323,7 +295,7 @@ export const PositionsPanel: React.FC = () => {
                 className="w-full py-2 px-1.5 border border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 text-zinc-400 hover:text-white rounded text-[10px] font-mono tracking-tight uppercase transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <PlusCircle className="w-3.5 h-3.5" />
-                Fill AI Indicators
+                Copy heuristic levels
               </button>
             </div>
           </div>
@@ -481,7 +453,7 @@ export const PositionsPanel: React.FC = () => {
                   <div className="space-y-0.5">
                     <span className="text-[10px] text-zinc-500 font-mono uppercase block">Suggested Lot Size</span>
                     <span className="text-sm font-mono font-extrabold text-amber-400">
-                      {suggestedLotSize} Lots
+                      {suggestedLotSize === null ? 'Unavailable — check fresh FX / risk' : `${suggestedLotSize} Lots`}
                     </span>
                     <p className="text-[9px] text-zinc-500">
                       Risk: <span className="text-red-400 font-medium">${riskAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> ({riskPercent}%)
@@ -490,8 +462,9 @@ export const PositionsPanel: React.FC = () => {
 
                   <button
                     type="button"
+                    disabled={suggestedLotSize === null}
                     onClick={() => {
-                      setAmount(suggestedLotSize);
+                      if (suggestedLotSize !== null) setAmount(suggestedLotSize);
                       setErrorText('');
                     }}
                     className="py-1.5 px-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold rounded text-[10px] font-mono uppercase tracking-tight transition-colors cursor-pointer"
@@ -588,7 +561,7 @@ export const PositionsPanel: React.FC = () => {
                 <div className="space-y-2 max-h-[190px] overflow-y-auto">
                   {positions.map((pos) => {
                     const isBuy = pos.type === 'BUY';
-                    const isGain = pos.pnl >= 0;
+                    const isGain = hasAccountPnl(pos) && pos.pnl >= 0;
                     
                     return (
                       <div
@@ -627,15 +600,17 @@ export const PositionsPanel: React.FC = () => {
                             <div className={`font-mono font-bold text-sm leading-none ${
                               isGain ? 'text-emerald-400' : 'text-rose-500'
                             }`}>
-                              {isGain ? '+' : ''}${pos.pnl.toFixed(2)}
+                              {formatPnl(pos)}
                             </div>
                             <span className="text-[9px] text-zinc-500 font-mono leading-none">
-                              Unrealized PnL
+                              Last mark · {pos.markAsOf ? quoteQuality(watchlistItems.find(q => q.symbol === pos.symbol)) : 'unavailable'}
                             </span>
                           </div>
 
                           <button
-                            onClick={() => onClosePosition(pos.id)}
+                            onClick={() => { const result = onClosePosition(pos.id); if (!result.ok) setErrorText(ORDER_REJECTION_TEXT[result.reason]); }}
+                            aria-label={`Close ${pos.symbol} position`}
+                            disabled={!isExecutableQuote(watchlistItems.find(q => q.symbol === pos.symbol))}
                             className="p-1.5 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded transition-colors cursor-pointer"
                             title="Close Position"
                           >
@@ -772,7 +747,7 @@ export const PositionsPanel: React.FC = () => {
               <div>
                 <div className="space-y-2 max-h-[290px] overflow-y-auto pr-0.5 mb-2">
                   {paginatedClosedTrades.map((trade) => {
-                    const isGain = trade.pnl >= 0;
+                    const isGain = hasAccountPnl(trade) && trade.pnl >= 0;
                     const isBuy = trade.type === 'BUY';
                     return (
                       <div
@@ -816,7 +791,7 @@ export const PositionsPanel: React.FC = () => {
                           <div className={`font-bold text-sm leading-none ${
                             isGain ? 'text-emerald-400' : 'text-rose-500'
                           }`}>
-                            {isGain ? '+' : ''}${trade.pnl.toFixed(2)}
+                            {formatPnl(trade)}
                           </div>
                           <span className="text-[9px] text-zinc-500 block mt-1">
                             Realized PnL

@@ -7,10 +7,18 @@ import type { Application, Request, Response, NextFunction } from 'express';
  * dev-only and are NOT used as an allowlist once NODE_ENV=production.
  */
 export function getAllowedOrigins(): string[] {
-  if (process.env.ALLOWED_ORIGINS) {
-    return process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  const configured = (process.env.ALLOWED_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  if (process.env.APP_URL) { try { configured.push(new URL(process.env.APP_URL).origin); } catch { /* invalid config does not grant an origin */ } }
+  return [...new Set(configured.length ? configured : process.env.NODE_ENV === 'production' ? [] : ['http://localhost:5173', 'http://localhost:3000'])];
+}
+/** CSRF/browser boundary only, NEVER account identity. Dev accepts the exact proxied preview host. */
+export function isAllowedBrowserOrigin(origin: string, host?: string): boolean {
+  if (getAllowedOrigins().includes(origin)) return true;
+  if (process.env.NODE_ENV !== 'production') {
+    try { const url = new URL(origin); return ['http:', 'https:'].includes(url.protocol) && url.origin === origin && url.host === host; }
+    catch { return false; }
   }
-  return ['http://localhost:5173', 'http://localhost:3000'];
+  return false;
 }
 
 /**
@@ -114,7 +122,7 @@ export function applyTrustProxy(app: Application): string {
 }
 
 /** Client identity used as a rate-limit key. Never trusts a header the app hasn't opted into. */
-export function sanitizeClientIp(req: Request): string {
+export function sanitizeClientIp(req: { ip?: string; socket?: { remoteAddress?: string } }): string {
   // Express computes req.ip from XFF only when `trust proxy` is enabled; otherwise it is the
   // socket address. That single source of truth removes the spoofing path.
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -148,7 +156,8 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
 
   // Security headers (helmet-like)
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  if (process.env.NODE_ENV === 'production') res.setHeader('X-Frame-Options', 'DENY');
+  else res.removeHeader('X-Frame-Options'); // dev previews are intentionally embedded; production stays frame-denied
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()');
 
@@ -173,7 +182,7 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
     // 'self' would silently break cloud sync. So: derive the Supabase host from config, and let
     // operators append anything else explicitly.
     const connectSrc = new Set<string>(["'self'", 'ws:', 'wss:']);
-    const supabaseUrl = process.env.VITE_SUPABASE_URL;
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
     if (supabaseUrl) {
       try { connectSrc.add(new URL(supabaseUrl).origin); } catch { /* malformed -> ignore */ }
     }

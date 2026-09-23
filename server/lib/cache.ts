@@ -11,13 +11,14 @@ export class LRUCache<K, V> {
   private maxSize: number;
 
   constructor(maxSize = 100) {
+    if (!Number.isInteger(maxSize) || maxSize < 1) throw new RangeError('Cache size must be positive');
     this.maxSize = maxSize;
   }
 
   get(key: K): V | undefined {
     const entry = this.map.get(key);
     if (!entry) return undefined;
-    if (Date.now() > entry.expiresAt) {
+    if (Date.now() >= entry.expiresAt) {
       this.map.delete(key);
       return undefined;
     }
@@ -28,7 +29,8 @@ export class LRUCache<K, V> {
   }
 
   set(key: K, value: V, ttlMs: number): void {
-    if (this.map.size >= this.maxSize) {
+    if (this.map.has(key)) this.map.delete(key);
+    else if (this.map.size >= this.maxSize) {
       const firstKey = this.map.keys().next().value;
       if (firstKey !== undefined) this.map.delete(firstKey);
     }

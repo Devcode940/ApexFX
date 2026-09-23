@@ -1,3 +1,5 @@
+import { fetchJsonWithTimeout } from './fetch';
+
 /**
  * Improved in-memory sliding window rate limiter with periodic cleanup
  * and optional Upstash Redis fallback for serverless.
@@ -17,35 +19,15 @@ const DEFAULT_WINDOW_MS = 60_000;
 const CHAT_MAX = 10;
 const CHAT_WINDOW_MS = 60_000;
 
-// Cleanup every 5 minutes: remove buckets with no recent hits
-const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-let cleanupTimer: NodeJS.Timeout | null = null;
-
-function startCleanup() {
-  if (cleanupTimer) return;
-  cleanupTimer = setInterval(() => {
-    const now = Date.now();
-    const cutoff = now - DEFAULT_WINDOW_MS * 2;
-    for (const [key, hits] of buckets) {
-      const filtered = hits.filter((t) => t > cutoff);
-      if (filtered.length === 0) buckets.delete(key);
-      else buckets.set(key, filtered);
-    }
-    const chatCutoff = now - CHAT_WINDOW_MS * 2;
-    for (const [key, hits] of CHAT_BUCKETS) {
-      const filtered = hits.filter((t) => t > chatCutoff);
-      if (filtered.length === 0) CHAT_BUCKETS.delete(key);
-      else CHAT_BUCKETS.set(key, filtered);
-    }
-  }, CLEANUP_INTERVAL_MS);
-
-  // Don't prevent process exit
-  if (cleanupTimer && typeof (cleanupTimer as any).unref === 'function') {
-    (cleanupTimer as any).unref();
+// Request-driven pruning: importing the API creates no timer/background work.
+let lastPrunedAt = 0;
+function prune(now: number) {
+  if (now - lastPrunedAt < 60_000 && buckets.size < 10_000 && CHAT_BUCKETS.size < 10_000) return;
+  lastPrunedAt = now;
+  for (const map of [buckets, CHAT_BUCKETS]) {
+    for (const [key, hits] of map) if (!hits.length || hits[hits.length - 1] < now - 120_000) map.delete(key);
   }
 }
-
-startCleanup();
 
 function isRateLimitedMemory(
   map: Map<string, Bucket>,
@@ -54,6 +36,8 @@ function isRateLimitedMemory(
   windowMs: number
 ): boolean {
   const now = Date.now();
+  prune(now);
+  if (map.size >= 10_000 && !map.has(key)) return true;
   const cutoff = now - windowMs;
   const existing = map.get(key) || [];
   const hits = existing.filter((t) => t > cutoff);
@@ -76,31 +60,17 @@ async function isRateLimitedUpstash(
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return false; // fallback handled by caller
 
-  // Use fixed window counter via INCR + EXPIRE
-  // Key format: ratelimit:<key>:<window>
   const windowId = Math.floor(Date.now() / windowMs);
   const redisKey = `ratelimit:${key}:${windowId}`;
-
   try {
-    const res = await fetch(`${url}/incr/${encodeURIComponent(redisKey)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(2000),
+    const data = await fetchJsonWithTimeout(url, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeoutMs: 2000, maxBytes: 16_000,
+      body: JSON.stringify(['EVAL', "local n = redis.call('INCR', KEYS[1]); if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return n", 1, redisKey, Math.ceil(windowMs / 1000)]),
     });
-    if (!res.ok) return false;
-    const data = (await res.json()) as { result: number };
-    const count = data.result || 0;
-
-    if (count === 1) {
-      // Set expiry to windowMs in seconds
-      await fetch(`${url}/expire/${encodeURIComponent(redisKey)}/${Math.ceil(windowMs / 1000)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(2000),
-      });
-    }
-
-    return count > max;
+    return Number(data?.result) > max;
   } catch {
-    // On Upstash failure, fallback to allow (fail open) to avoid blocking
+    // Free/read API protection still has the bounded memory limiter below. PAID work has its own
+    // fail-CLOSED transactional budget; it must never use this availability-oriented fallback.
     return false;
   }
 }
@@ -113,12 +83,13 @@ async function isRateLimitedUpstash(
  * headroom; the endpoints that cost real money (Twelve Data credits) get less.
  */
 export const RATE_LIMIT_POLICIES: Array<{ match: (path: string) => boolean; max: number; windowMs: number; label: string }> = [
-  { match: (p) => p === '/api/health' || p === '/healthz', max: 120, windowMs: 60_000, label: 'health' },
+  { match: (p) => ['/api/health', '/api/ready', '/api/live', '/healthz', '/api/capabilities'].includes(p), max: 120, windowMs: 60_000, label: 'health' },
   { match: (p) => p.startsWith('/api/market/prices'), max: 60, windowMs: 60_000, label: 'prices' },
   { match: (p) => p.startsWith('/api/market/history'), max: 20, windowMs: 60_000, label: 'history' },
   // Spends upstream API credits: throttle hardest.
   { match: (p) => p.startsWith('/api/market/quote'), max: 10, windowMs: 60_000, label: 'quote' },
   { match: (p) => p.startsWith('/api/market/forexrate'), max: 10, windowMs: 60_000, label: 'forexrate' },
+  { match: (p) => p.startsWith('/api/market/calendar'), max: 12, windowMs: 60_000, label: 'calendar' },
   { match: (p) => p.startsWith('/api/market/news'), max: 15, windowMs: 60_000, label: 'news' },
   { match: (p) => p.startsWith('/api/ws/token'), max: 20, windowMs: 60_000, label: 'ws-token' },
 ];

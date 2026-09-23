@@ -14,6 +14,7 @@ const EXTRA_ALLOWED_HOSTS: true | string[] | undefined = (() => {
 
 export default defineConfig(() => {
   return {
+    build: { outDir: 'dist/client' },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
