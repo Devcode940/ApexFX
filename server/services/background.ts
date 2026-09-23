@@ -3,7 +3,6 @@ import { reserveMarketBudget, type BudgetLease } from '../lib/paidBudget';
 import { WebSocket } from 'ws';
 import { applyMarketQuote, fetchRealLatestPrices, fetchYahooPricesFor, getPollMs, getQuoteSyncMs, getYahooFailureStreak, serverWatchlist, TD_SYMBOLS, allowMarketFallbacks } from './market';
 import { isExecutableQuote, providerTimestamp } from '../../shared/market';
-import { demoFeedEnabled } from './demoFeed';
 import { warn } from '../lib/logger';
 
 /** Explicit process lifecycle, never started by importing the Express/Vercel app. */
@@ -18,7 +17,7 @@ export function startMarketServices(broadcast: () => void): () => void {
   let lastRestSync = 0;
   let connecting = false;
   const connect = async () => {
-    if (!running || stream || connecting || demoFeedEnabled() || tiingoConfigured() || !allowMarketFallbacks() || !process.env.TWELVEDATA_API_KEY) return;
+    if (!running || stream || connecting || tiingoConfigured() || !allowMarketFallbacks() || !process.env.TWELVEDATA_API_KEY) return;
     connecting = true;
     let lease: BudgetLease | undefined;
     try {
@@ -68,9 +67,9 @@ export function startMarketServices(broadcast: () => void): () => void {
     } catch (error) { warn('[Feed] Refresh failed:', error); }
     finally {
       if (running) {
-        const base = demoFeedEnabled() ? 10_000 : !tiingoConfigured() && process.env.TWELVEDATA_API_KEY ? getPollMs() : 5000;
+        const base = !tiingoConfigured() && process.env.TWELVEDATA_API_KEY ? getPollMs() : 5000;
         // A failing fallback must not slow preferred Tiingo checks past the quote freshness window.
-        pollTimer = setTimeout(tick, demoFeedEnabled() || tiingoConfigured() ? 10_000 : Math.min(60_000, base * 2 ** Math.min(getYahooFailureStreak(), 4)));
+        pollTimer = setTimeout(tick, tiingoConfigured() ? 10_000 : Math.min(60_000, base * 2 ** Math.min(getYahooFailureStreak(), 4)));
       }
     }
   };

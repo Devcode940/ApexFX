@@ -7,9 +7,9 @@ export interface MarketHistoryResponse {
   timeframe: Timeframe;
   /** Original provider-response receipt, retained when serving an instance-cached snapshot. */
   fetchedAt: number;
-  source: 'tiingo' | 'twelvedata' | 'yahoo' | 'demo';
+  source: 'tiingo' | 'twelvedata' | 'yahoo';
   providerSymbol: string;
-  instrumentKind: 'spot' | 'futures' | 'reference';
+  instrumentKind: 'spot' | 'futures';
   data: Candlestick[];
   aggregation?: string;
 }

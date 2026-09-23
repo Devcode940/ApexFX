@@ -76,15 +76,6 @@ The fixed source is `https://nfs.faireconomy.media/ff_calendar_thisweek.json`, a
 
 No website HTML scraping, alternate-format/proxy bypass, random sentiment, invented release values or live-release-feed claim. If you need complete actuals, revisions, historical calendars or release-time latency/SLA, choose a provider/contract that explicitly supplies them rather than treating this weekly export as that service. The AI assistant has not gained live calendar tools from this UI integration.
 
-## Demo preview mode (dev only)
-
-`APEX_DEMO_FEED=true` makes the server generate deterministic synthetic quotes, chart history (including `W`), and weekly calendar events so the UI is explorable without network access or provider keys. Guarantees:
-
-- Every artifact carries `provider`/`source: "demo"`, instrument kind `reference`, and the UI shows explicit demo labels in the watchlist, chart strip and calendar. Nothing is presented as Tiingo, Twelve Data, Yahoo, or Forex Factory data.
-- Because reference quotes can never pass `isExecutableQuote`, the paper engine hard-refuses opens and closes (`DEMO_FEED`) — including closing a position while only synthetic prices are available. Demo frames never replace an executable quote.
-- No provider request is attempted and no paid budget is reserved while demo mode is active; readiness still reports `degraded` honestly, and `/api/health` shows `feed.demo: true`.
-- `NODE_ENV=production` ignores the flag entirely. This is not a live-data substitute and must never be deployed.
-
 ## Verify after configuration
 
 These are app routes; do not put the Tiingo token in them:

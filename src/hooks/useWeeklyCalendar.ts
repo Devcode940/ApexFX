@@ -45,8 +45,8 @@ export function useWeeklyCalendar() {
         if (!raw || typeof raw !== 'object') throw new Error('Invalid weekly calendar response.');
         const value = raw as Record<string, unknown>;
         if (!response.ok) throw new Error(typeof value.error === 'string' ? value.error.slice(0, 300) : 'Weekly calendar unavailable.');
-        if (!['forexfactory', 'demo'].includes(String(value.source)) || value.success !== true || typeof value.fetchedAt !== 'number' || !Number.isSafeInteger(value.fetchedAt) || value.fetchedAt <= 0 || value.fetchedAt > Date.now() + 5000 || !Array.isArray(value.events) || value.events.length > 2000 || !value.events.every(isCalendarEvent)) throw new Error('Invalid weekly calendar response.');
-        const result = calendarResponse({ version: 1, fetchedAt: value.fetchedAt, events: value.events }, Date.now(), typeof value.warning === 'string' ? value.warning.slice(0, 400) : null, value.source === 'demo' ? 'demo' : 'forexfactory');
+        if (value.source !== 'forexfactory' || value.success !== true || typeof value.fetchedAt !== 'number' || !Number.isSafeInteger(value.fetchedAt) || value.fetchedAt <= 0 || value.fetchedAt > Date.now() + 5000 || !Array.isArray(value.events) || value.events.length > 2000 || !value.events.every(isCalendarEvent)) throw new Error('Invalid weekly calendar response.');
+        const result = calendarResponse({ version: 1, fetchedAt: value.fetchedAt, events: value.events }, Date.now(), typeof value.warning === 'string' ? value.warning.slice(0, 400) : null);
         setData(result); retryAfter.current = 0; setRetryAt(0);
         nextAt = Date.now() + (result.stale ? 5 * 60_000 : Math.max(60_000, CALENDAR_REFRESH_MS - (Date.now() - result.fetchedAt)));
       } catch (error) {

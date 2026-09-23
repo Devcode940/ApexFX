@@ -22,8 +22,7 @@ export const WeeklyCalendar: React.FC = React.memo(() => {
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(undefined, { timeZone: zone, weekday: 'short', month: 'short', day: 'numeric' }), [zone]);
   const sourceDayFormat = useMemo(() => new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }), []);
   const timeFormat = useMemo(() => new Intl.DateTimeFormat(undefined, { timeZone: zone, hour: '2-digit', minute: '2-digit' }), [zone]);
-  // Re-derive staleness against the viewer clock; source must be carried through so demo responses are never re-labelled Forex Factory.
-  const current = useMemo(() => data ? calendarResponse({ version: 1, fetchedAt: data.fetchedAt, events: data.events }, now, data.warning, data.source) : null, [data, now]);
+  const current = useMemo(() => data ? calendarResponse({ version: 1, fetchedAt: data.fetchedAt, events: data.events }, now, data.warning) : null, [data, now]);
   const events = useMemo(() => (data?.events ?? []).filter(event =>
     (currencies === 'all' || calendarEventAffects(event, selectedSymbol)) && (!highOnly || event.impact === 'HIGH') &&
     (!upcomingOnly || event.scheduledAt === null || event.scheduledAt >= now)), [data, currencies, selectedSymbol, highOnly, upcomingOnly, now]);
@@ -40,13 +39,11 @@ export const WeeklyCalendar: React.FC = React.memo(() => {
   return <section id="weekly_calendar_component" className="flex h-full flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
     <div className="flex items-center justify-between gap-2 border-b border-zinc-800 bg-zinc-900 px-4 py-3">
       <h2 className="flex items-center gap-2 text-sm font-semibold text-zinc-200"><CalendarDays size={16} className="text-emerald-400" />Weekly Economic Calendar</h2>
-      <span className={`text-[10px] uppercase ${current?.source === 'demo' ? 'text-amber-400' : 'text-zinc-400'}`}>{loading ? 'Loading' : error ? 'Update failed' : current?.source === 'demo' ? 'Demo data' : current?.stale ? 'Cached / stale' : data ? 'Weekly export' : 'Unavailable'}</span>
+      <span className="text-[10px] uppercase text-zinc-400">{loading ? 'Loading' : error ? 'Update failed' : current?.stale ? 'Cached / stale' : data ? 'Weekly export' : 'Unavailable'}</span>
     </div>
     <div className="space-y-2 border-b border-zinc-800 px-4 py-3 text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        {current?.source === 'demo'
-          ? <span className="inline-flex items-center gap-1 text-amber-400" title="APEX_DEMO_FEED generates these events locally; no provider was contacted">Synthetic demo calendar</span>
-          : <a className="inline-flex items-center gap-1 text-emerald-400" href={CALENDAR_SOURCE_URL} target="_blank" rel="noopener noreferrer">Forex Factory <ExternalLink size={12} /></a>}
+        <a className="inline-flex items-center gap-1 text-emerald-400" href={CALENDAR_SOURCE_URL} target="_blank" rel="noopener noreferrer">Forex Factory <ExternalLink size={12} /></a>
         <button className={button} onClick={retry} disabled={loading || retryAt > now} title={retryAt > now ? `Retry after ${timeFormat.format(retryAt)} ${zone}` : 'Revalidate the cached weekly export'} aria-label="Refresh weekly calendar">{loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}</button>
       </div>
       <div className="flex flex-wrap gap-3 text-[11px] text-zinc-300">
@@ -61,7 +58,7 @@ export const WeeklyCalendar: React.FC = React.memo(() => {
       </div>
       <p className="text-[10px] text-zinc-500">Times: {zone}; untimed events keep the source date. Source week starts Sunday in New York; chart W candles use Monday UTC.</p>
       {current && <p className="text-[10px] text-zinc-500">Retrieved {dateFormat.format(current.fetchedAt)} {timeFormat.format(current.fetchedAt)} · {current.coverageStart && current.coverageEnd ? `${dateFormat.format(current.coverageStart)} – ${dateFormat.format(current.coverageEnd)}` : 'Coverage timestamps unavailable'}</p>}
-      <p className="text-[10px] text-zinc-500">{current?.source === 'demo' ? 'Locally generated demo events — not scheduled releases and not Forex Factory data. ' : ''}Hourly cached export, not a live release feed. Actual/forecast/previous values are shown only when supplied; impact is the provider’s rating.</p>
+      <p className="text-[10px] text-zinc-500">Hourly cached export, not a live release feed. Actual/forecast/previous values are shown only when supplied; impact is the provider’s rating.</p>
     </div>
     {(error || current?.warning) && <div role="status" className="mx-4 mt-3 flex gap-2 rounded border border-amber-900 bg-amber-950/20 p-2 text-[11px] text-amber-200"><AlertTriangle size={14} className="shrink-0" /><span>{error ?? current?.warning}</span></div>}
     <div className="flex-1 space-y-2 overflow-y-auto p-4">

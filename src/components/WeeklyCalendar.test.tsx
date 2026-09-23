@@ -16,7 +16,6 @@ vi.mock('../context/TradingContext', async () => {
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let events: CalendarEvent[];
-let responseExtra: Record<string, unknown> = {};
 let fetch: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(NOW); vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
@@ -26,7 +25,7 @@ beforeEach(() => {
     calendarEvent({ id: 'c'.repeat(24), title: 'GBP future fixture', currency: 'GBP', impact: 'MEDIUM' }),
     calendarEvent({ id: 'd'.repeat(24), title: 'JPY holiday fixture', currency: 'JPY', impact: 'HOLIDAY', timing: 'all-day', scheduledAt: null, sourceDate: '2026-09-23T00:00:00-04:00' }),
   ];
-  responseExtra = {}; fetch = vi.fn(async () => new Response(JSON.stringify({ ...calendarFixture(events), ...responseExtra }))); vi.stubGlobal('fetch', fetch);
+  fetch = vi.fn(async () => new Response(JSON.stringify(calendarFixture(events)))); vi.stubGlobal('fetch', fetch);
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -83,13 +82,6 @@ describe('default Forex Factory fundamentals panel', () => {
     const expected = new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(Date.parse('2026-09-23T00:00:00Z'));
     expect(articles[0].textContent).toContain(expected); expect(articles[0].textContent).toContain('Time TBA');
     expect(articles[1].textContent).toContain('Date unavailable'); expect(articles[1].textContent).not.toContain('Mar');
-  });
-  it('marks a demo-sourced snapshot as synthetic and removes the Forex Factory attribution', async () => {
-    responseExtra = { source: 'demo', sourceUrl: '', weekStart: '2026-09-21', currentWeek: true, stale: false };
-    await render();
-    expect(host.textContent).toContain('Demo data'); expect(host.textContent).toContain('Synthetic demo calendar');
-    expect(host.textContent).toContain('not Forex Factory data'); // the demo note says so explicitly rather than staying silent
-    expect(host.querySelector('a[href="https://www.forexfactory.com/calendar"]')).toBeNull();
   });
   it('paginates locally and resets the page on a currency-filter change', async () => {
     events = Array.from({ length: 8 }, (_, i) => calendarEvent({ id: i.toString(16).padStart(24, '0'), title: `Page event ${i}` }));

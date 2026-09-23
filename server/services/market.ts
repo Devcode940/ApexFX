@@ -4,8 +4,7 @@ import { log, warn } from '../lib/logger';
 import { reserveMarketBudget, BudgetError } from '../lib/paidBudget';
 import { priceCache } from '../lib/cache';
 import { singleFlight, cachedLoad } from '../lib/singleFlight';
-import { INSTRUMENTS, EMPTY_QUOTE_METADATA, isExecutableQuote, isSymbol, parseQuote, providerTimestamp, shouldAcceptQuote, sourceOf, type MarketQuote, type FeedSource } from '../../shared/market';
-import { demoFeedEnabled, demoQuoteFor } from './demoFeed';
+import { INSTRUMENTS, EMPTY_QUOTE_METADATA, isExecutableQuote, parseQuote, providerTimestamp, shouldAcceptQuote, sourceOf, type MarketQuote, type FeedSource } from '../../shared/market';
 
 export const PAIRS_CONFIG_WS = INSTRUMENTS;
 export const TD_SYMBOLS: Record<string, string> = Object.fromEntries(Object.keys(INSTRUMENTS).map(s => [s, `${s.slice(0, 3)}/${s.slice(3)}`]));
@@ -110,12 +109,6 @@ export interface FeedSyncSummary extends YahooPriceSyncResult { source: FeedSour
 export const allowMarketFallbacks = () => process.env.MARKET_ALLOW_FALLBACKS !== 'false';
 export function fetchRealLatestPrices(): Promise<FeedSyncSummary> {
   return singleFlight('market:refresh', async () => {
-    // The dev-only demo feed short-circuits first: no provider call and no paid-budget reservation.
-    if (demoFeedEnabled()) {
-      let applied = 0;
-      for (const item of serverWatchlist) if (isSymbol(item.symbol) && applyMarketQuote(item, demoQuoteFor(item.symbol))) applied++;
-      return { source: marketSource(), attempted: serverWatchlist.length, applied, failed: 0 };
-    }
     if (process.env.MARKET_DATA_MODE === 'offline') return { source: marketSource(), attempted: 0, applied: 0, failed: 0 };
     let tiingoApplied = 0;
     if (tiingoConfigured()) {

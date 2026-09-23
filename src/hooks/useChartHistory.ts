@@ -35,9 +35,9 @@ export function useChartHistory(selectedSymbol: string, selectedTimeframe: Timef
         if (cancelled) return;
         if (controller.signal.aborted) throw new Error('History request timed out');
         const meta: HistoryMeta = {
-          provider: result.source === 'tiingo' || result.source === 'twelvedata' || result.source === 'yahoo' || result.source === 'demo' ? result.source : null,
+          provider: result.source === 'tiingo' || result.source === 'twelvedata' || result.source === 'yahoo' ? result.source : null,
           providerSymbol: typeof result.providerSymbol === 'string' ? result.providerSymbol : null,
-          instrumentKind: result.instrumentKind === 'spot' || result.instrumentKind === 'futures' || result.instrumentKind === 'reference' ? result.instrumentKind : 'unknown',
+          instrumentKind: result.instrumentKind === 'spot' || result.instrumentKind === 'futures' ? result.instrumentKind : 'unknown',
         };
         // Success only: an aborted/failed request NEVER poisons this cache, including StrictMode replay.
         loaded.current.set(key, { time: Date.now(), meta });

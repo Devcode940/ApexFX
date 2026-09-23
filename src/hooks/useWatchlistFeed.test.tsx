@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { isExecutableQuote } from '../../shared/market';
 import { useWatchlistFeed, retryAfterMs } from './useWatchlistFeed';
 import { QuoteStore } from '../utils/quoteStore';
 import { quote } from '../test/fixtures';
@@ -92,15 +91,5 @@ describe('transport capability, auth and freshness state machine', () => {
     act(() => store.apply({ EURUSD: quote('EURUSD', 1.11) })); expect(hook.result.tickStates.EURUSD).toBe('up');
     act(() => store.apply({ EURUSD: quote('EURUSD', 1.09) })); expect(hook.result.tickStates.EURUSD).toBe('down');
     await act(async () => vi.advanceTimersByTimeAsync(901)); expect(hook.result.tickStates.EURUSD).toBeUndefined();
-  });
-});
-describe('labelled demo responses', () => {
-  it('drives display polling without ever qualifying as executable freshness', async () => {
-    prices = async () => json({ success: true, dataMode: 'demo', rates: { EURUSD: quote('EURUSD', 1.1, { provider: 'demo', providerSymbol: 'DEMO:EURUSD', instrumentKind: 'reference' }) } });
-    const { hook, store } = await mount();
-    expect(hook.result.feedStatus).toBe('polling'); expect(hook.result.feedSource).toBe('demo');
-    const stored = store.get('EURUSD')!; expect(stored.provider).toBe('demo');
-    expect(isExecutableQuote(stored)).toBe(false);
-    expect(calls('/api/ws/token')).toHaveLength(0);
   });
 });

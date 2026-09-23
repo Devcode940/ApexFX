@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { WatchlistItem } from '../types';
 import { createWatchlistFromConfig } from '../utils/forexData';
-import { isExecutableQuote, parseQuote, sourceOf, QUOTE_MAX_AGE_MS } from '../../shared/market';
+import { isExecutableQuote, parseQuote, sourceOf } from '../../shared/market';
 import type { QuoteStore } from '../utils/quoteStore';
 
 export type FeedStatus = 'connecting' | 'live' | 'polling' | 'degraded';
@@ -82,12 +82,7 @@ export function useWatchlistFeed(store: QuoteStore, accessToken?: string) {
           notBefore = Date.now() + Math.max(retryAfterMs(response.headers.get('Retry-After')), Number(body?.retryAfterSeconds) * 1000 || 0, 2500);
         }
         store.apply(body?.rates);
-        // A demo-labelled response can drive display/polling but never executable freshness.
-        const demoMode = body?.dataMode === 'demo';
-        const fresh = response.ok && body?.success !== false && body?.rates && Object.entries(body.rates).some(([symbol, raw]) => {
-          const parsed = parseQuote(symbol, raw);
-          return !!parsed && (demoMode ? parsed.provider === 'demo' && parsed.price > 0 : isExecutableQuote(parsed));
-        });
+        const fresh = response.ok && body?.success !== false && body?.rates && Object.entries(body.rates).some(([symbol, raw]) => isExecutableQuote(parseQuote(symbol, raw) ?? undefined));
         setTransport(fresh ? 'polling' : 'degraded');
         pollDelay = fresh ? 2500 : Math.min(15_000, pollDelay * 2);
       } catch {
@@ -128,14 +123,7 @@ export function useWatchlistFeed(store: QuoteStore, accessToken?: string) {
             const message = JSON.parse(event.data);
             if (!['INITIAL_RATES', 'PRICE_UPDATE'].includes(message.type) || !message.rates) return;
             store.apply(message.rates);
-            const validFrame = Object.entries(message.rates).some(([symbol, raw]) => {
-              const parsed = parseQuote(symbol, raw);
-              if (!parsed) return false;
-              // The server's own labelled demo frames keep display moving; they never qualify as executable quotes.
-              if (parsed.provider === 'demo') return true;
-              // Executable provider quotes are what prove true liveness.
-              return isExecutableQuote(parsed);
-            });
+            const validFrame = Object.entries(message.rates).some(([symbol, raw]) => isExecutableQuote(parseQuote(symbol, raw) ?? undefined));
             if (validFrame) {
               lastFrame = Date.now(); attempts = 0; socketFresh = true;
               setTransport('live'); clearTimeout(pollTimer);
@@ -180,10 +168,7 @@ export function useWatchlistFeed(store: QuoteStore, accessToken?: string) {
     };
   }, [store, accessToken]);
   const feedSource = useMemo(() => sourceOf(watchlistItems), [watchlistItems]);
-  // Demo quotes may hold the DISPLAY status up (with the same age window) but never execution;
-  // isExecutableQuote below stays the only trading gate.
-  const hasFreshQuote = watchlistItems.some(q => isExecutableQuote(q, now) ||
-    (q.provider === 'demo' && q.price > 0 && typeof q.asOf === 'number' && now - q.asOf <= QUOTE_MAX_AGE_MS));
+  const hasFreshQuote = watchlistItems.some(q => isExecutableQuote(q, now));
   const feedStatus: FeedStatus = hasFreshQuote ? transport : transport === 'connecting' ? 'connecting' : 'degraded';
   return { watchlistItems, tickStates, wsConnected, feedStatus, feedSource };
 }

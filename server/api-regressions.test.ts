@@ -34,7 +34,7 @@ beforeEach(() => {
   clearAllBuckets(); priceCache.clear(); historyCache.clear(); setTdRestCooldown(-1); account++;
   createInitialWatchlist().forEach((item, index) => Object.assign(serverWatchlist[index], item));
   redisOk = true; yahooOk = true; tdOk = true; tiingoOk = true; tiingoSymbols = Object.keys(INSTRUMENTS); verifyOk = true; sdk.generate.mockReset(); sdk.options.mockClear(); sdk.generate.mockResolvedValue({ text: 'Fixture educational analysis.' });
-  for (const key of ['TIINGO_API_KEY', 'TIINGO_POLL_MS', 'TIINGO_HISTORY_CACHE_MS', 'MARKET_ALLOW_FALLBACKS', 'FOREX_FACTORY_ENABLED', 'FOREX_FACTORY_REQUIRE_SHARED', 'VERCEL', 'TWELVEDATA_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'WS_SHARED_SECRET', 'WS_REQUIRE_AUTH', 'AI_ALLOW_GUESTS', 'MARKET_DATA_MODE', 'PAID_BUDGET_MODE', 'APEX_DEMO_FEED']) vi.stubEnv(key, '');
+  for (const key of ['TIINGO_API_KEY', 'TIINGO_POLL_MS', 'TIINGO_HISTORY_CACHE_MS', 'MARKET_ALLOW_FALLBACKS', 'FOREX_FACTORY_ENABLED', 'FOREX_FACTORY_REQUIRE_SHARED', 'VERCEL', 'TWELVEDATA_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'WS_SHARED_SECRET', 'WS_REQUIRE_AUTH', 'AI_ALLOW_GUESTS', 'MARKET_DATA_MODE', 'PAID_BUDGET_MODE']) vi.stubEnv(key, '');
   vi.stubEnv('NODE_ENV', 'test'); vi.stubEnv('ALLOWED_ORIGINS', 'https://terminal.example');
   vi.stubEnv('SUPABASE_URL', 'https://auth.fixture'); vi.stubEnv('SUPABASE_ANON_KEY', 'fixture-public'); vi.stubEnv('GEMINI_MODEL', 'fixture-text-model');
   providerFetch = vi.fn(async (url: string) => {
@@ -249,39 +249,5 @@ describe('browser POST token and authenticate-before-upgrade contract', () => {
     expect(denied.status).toBe(401);
     expect((await request('/api/ws/token', { method: 'POST', headers: { Origin: 'https://terminal.example', ...bearer } })).status).toBe(200);
     expect((await request('/api/ws/token', { method: 'POST', headers: { 'x-ws-secret': 'fixture-shared' } })).status).toBe(200);
-  });
-});
-describe('APEX_DEMO_FEED dev-only synthetic feed (no provider access)', () => {
-  it('serves labelled demo quotes, weekly history, and a synthetic calendar while blocking execution eligibility and provider calls', async () => {
-    vi.stubEnv('APEX_DEMO_FEED', 'true');
-    const pricesResponse = await request('/api/market/prices'); const pricesBody = await pricesResponse.json();
-    expect(pricesResponse.status).toBe(200);
-    expect(pricesBody).toMatchObject({ success: true, dataMode: 'demo', source: 'demo' });
-    expect(pricesBody.rates.EURUSD).toMatchObject({ provider: 'demo', instrumentKind: 'reference', priceBasis: 'mid', dayStatsAvailable: true });
-    expect(pricesBody.rates.EURUSD.price).toBeGreaterThan(0);
-    expect(serverWatchlist.every(q => !isExecutableQuote(q))).toBe(true);
-
-    const health = await (await request('/api/health')).json();
-    expect(health.feed.demo).toBe(true); expect(health.status).toBe('degraded'); // honest readiness: nothing is executable
-    expect(health.feed.instruments.every((i: { quality: string }) => i.quality === 'reference')).toBe(true);
-    const capabilities = await (await request('/api/capabilities')).json();
-    expect(capabilities.demoFeed).toBe(true);
-
-    const history = await (await request('/api/market/history?symbol=EURUSD&timeframe=W')).json();
-    expect(history).toMatchObject({ success: true, source: 'demo', instrumentKind: 'reference', providerSymbol: 'DEMO:EURUSD' });
-    expect(history.data.length).toBeGreaterThan(0);
-    expect(history.data.every((bar: { time: number }) => (bar.time - 345_600) % 604_800 === 0)).toBe(true);
-
-    const calendar = await (await request('/api/market/calendar')).json();
-    expect(calendar).toMatchObject({ success: true, source: 'demo', weekStart: expect.any(String), stale: false });
-    expect(calendar.events.length).toBeGreaterThan(0);
-    expect(calendar.warning).toContain('demo');
-
-    // The legacy single-quote route stays honestly non-executable (503) instead of pretending.
-    const quoteResponse = await request('/api/market/quote?symbol=EURUSD');
-    expect(quoteResponse.status).toBe(503);
-    const quoteBody = await quoteResponse.json();
-    expect(quoteBody).toMatchObject({ success: false, provider: 'demo', quality: 'reference' });
-    expect(providerFetch).not.toHaveBeenCalled(); // no Tiingo/TD/Yahoo/FF request was made or budgeted
   });
 });

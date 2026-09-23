@@ -330,7 +330,6 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
 
       <div className="flex flex-wrap gap-2 text-[10px] text-zinc-400" role="status">
         <span>Chart: {historyMeta?.provider ?? 'unknown'} · {historyMeta?.instrumentKind ?? 'unknown'} · {data.at(-1)?.provisional ? 'partial observed bar' : 'provider history'}</span>
-        {historyMeta?.provider === 'demo' && <span className="text-amber-400">Synthetic demo series — not provider data; trading is disabled.</span>}
         {historyMeta && liveQuote && (historyMeta.instrumentKind !== liveQuote.instrumentKind || historyMeta.provider !== liveQuote.source || historyMeta.providerSymbol !== liveQuote.providerSymbol) && <span className="text-amber-400">Quote/chart source mismatch — prices are not merged.</span>}
         {timeframe === 'W' && <span>W: available daily OHLC · Monday–Sunday UTC · current / incomplete first week is provisional.</span>}
         {!hasUtcBucketGrid(data, timeframe) && <span>Non-UTC provider grid: history refresh only; quote buckets are not mixed.</span>}

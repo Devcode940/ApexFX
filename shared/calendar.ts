@@ -1,4 +1,3 @@
-import { candleBucketStart } from './timeframes';
 export const CALENDAR_SOURCE_URL = 'https://www.forexfactory.com/calendar';
 export const CALENDAR_REFRESH_MS = 3_600_000;
 export const CALENDAR_MAX_AGE_MS = 8 * 86400_000;
@@ -12,7 +11,7 @@ export interface CalendarEvent {
 }
 export interface CalendarSnapshot { version: 1; fetchedAt: number; events: CalendarEvent[]; etag?: string }
 export interface WeeklyCalendarResponse {
-  success: true; source: 'forexfactory' | 'demo'; sourceUrl: string; fetchedAt: number; expiresAt: number;
+  success: true; source: 'forexfactory'; sourceUrl: string; fetchedAt: number; expiresAt: number;
   stale: boolean; currentWeek: boolean | null; weekStart: string; coverageStart: number | null; coverageEnd: number | null;
   events: CalendarEvent[]; warning: string | null;
 }
@@ -51,15 +50,7 @@ export function isCalendarEvent(value: unknown): value is CalendarEvent {
     (row.timing === 'scheduled' ? row.scheduledAt !== null : row.scheduledAt === null) &&
     [row.forecast, row.previous, row.actual].every(v => v === null || (typeof v === 'string' && v.length <= 120));
 }
-export function calendarResponse(snapshot: CalendarSnapshot, now = Date.now(), warning: string | null = null, source: 'forexfactory' | 'demo' = 'forexfactory'): WeeklyCalendarResponse {
-  if (source === 'demo') {
-    // Demo weeks are chart-aligned Monday UTC; the Forex Factory Sunday/New York source-week check does not apply.
-    const dates = snapshot.events.flatMap(e => { const date = e.scheduledAt ?? calendarSourceTimestamp(e.sourceDate); return date === null ? [] : [date]; });
-    return { success: true, source: 'demo', sourceUrl: '', fetchedAt: snapshot.fetchedAt, expiresAt: snapshot.fetchedAt + CALENDAR_REFRESH_MS,
-      stale: false, currentWeek: true, weekStart: new Date(candleBucketStart(Math.floor(now / 1000), 'W') * 1000).toISOString().slice(0, 10),
-      coverageStart: dates.length ? Math.min(...dates) : null, coverageEnd: dates.length ? Math.max(...dates) : null,
-      events: snapshot.events, warning: warning ?? 'Synthetic demo calendar; not real scheduled releases.' };
-  }
+export function calendarResponse(snapshot: CalendarSnapshot, now = Date.now(), warning: string | null = null): WeeklyCalendarResponse {
   const weekStart = forexFactoryWeekStart(now);
   const dates = snapshot.events.flatMap(e => { const date = e.scheduledAt ?? calendarSourceTimestamp(e.sourceDate); return date === null ? [] : [date]; });
   const weeks = new Set(dates.map(forexFactoryWeekStart));

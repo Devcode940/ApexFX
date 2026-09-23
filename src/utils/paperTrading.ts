@@ -22,14 +22,13 @@ export function isTakeProfitHit(type: 'BUY' | 'SELL', price: number, tp: number 
   return tp !== undefined && Number.isFinite(tp) && (type === 'BUY' ? price >= tp : price <= tp);
 }
 
-export type OrderRejectionReason = 'NO_PRICE' | 'STALE_PRICE' | 'BAD_AMOUNT' | 'SLTP_MISORDERED' | 'ACCOUNT_LOADING' | 'INSTRUMENT_CHANGED' | 'BOOK_LIMIT' | 'DEMO_FEED';
+export type OrderRejectionReason = 'NO_PRICE' | 'STALE_PRICE' | 'BAD_AMOUNT' | 'SLTP_MISORDERED' | 'ACCOUNT_LOADING' | 'INSTRUMENT_CHANGED' | 'BOOK_LIMIT';
 export type OrderRejection = { ok: true } | { ok: false; reason: OrderRejectionReason };
 export const ORDER_REJECTION_TEXT: Record<OrderRejectionReason, string> = {
   BOOK_LIMIT: 'Journal capacity reached. Export and archive the book before opening more positions.',
   NO_PRICE: 'No market quote available — order rejected.',
   STALE_PRICE: 'A fresh, timestamped spot quote is required. Reference, stale, and futures-proxy prices cannot execute orders.',
   BAD_AMOUNT: `Lot size must be between 0.01 and ${MAX_LOTS}. Stop/target prices must be finite and positive.`,
-  DEMO_FEED: 'The synthetic demo feed is active. Orders stay disabled while prices are simulated.',
   SLTP_MISORDERED: 'Stop loss and take profit must be on the correct sides of the entry price.',
   ACCOUNT_LOADING: 'Waiting for the account book to load.',
   INSTRUMENT_CHANGED: 'The feed instrument differs from this position. Spot and futures prices cannot be mixed.',

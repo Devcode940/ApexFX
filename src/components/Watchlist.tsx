@@ -115,7 +115,6 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
 
       {/* Transport status is distinct from provider cadence/freshness. */}
       <div className="p-3 bg-zinc-900/45 border-t border-zinc-800 text-[11px] text-zinc-500 space-y-1 font-mono">
-        {feedSource === 'demo' && <p className="text-amber-400">DEMO DATA — synthetic series; quotes cannot execute orders.</p>}
         {items.some(item => item.provider === 'tiingo') && <p className="text-[10px]">Tiingo: polled REST snapshots, not tick streaming.</p>}
         <div className="flex justify-between">
           <span>Feed:</span>

@@ -11,7 +11,7 @@ export const INSTRUMENTS = {
 } as const;
 
 export type SymbolCode = keyof typeof INSTRUMENTS;
-export type MarketProvider = 'tiingo' | 'twelvedata' | 'yahoo' | 'frankfurter' | 'demo';
+export type MarketProvider = 'tiingo' | 'twelvedata' | 'yahoo' | 'frankfurter';
 export type InstrumentKind = 'spot' | 'futures' | 'reference' | 'unknown';
 export type QuoteQuality = 'fresh' | 'stale' | 'reference' | 'unknown' | 'unavailable';
 export type FeedSource = MarketProvider | 'mixed' | null;
@@ -71,9 +71,8 @@ export function parseQuote(symbol: string, value: unknown): MarketQuote | null {
   const q = value as Record<string, unknown>;
   if (!positiveNumber(q.price) || (q.symbol !== undefined && q.symbol !== symbol)) return null;
   if ((positiveNumber(q.asOf) && q.asOf > Date.now() + FUTURE_TOLERANCE_MS) || (positiveNumber(q.receivedAt) && q.receivedAt > Date.now() + FUTURE_TOLERANCE_MS)) return null;
-  const provider = ['tiingo', 'twelvedata', 'yahoo', 'frankfurter', 'demo'].includes(String(q.provider)) ? q.provider as MarketProvider : null;
-  // Demo is reference-grade by construction: forcing the kind keeps isExecutableQuote false everywhere.
-  const instrumentKind = provider === 'frankfurter' || provider === 'demo' ? 'reference' : ['spot', 'futures', 'reference'].includes(String(q.instrumentKind)) ? q.instrumentKind as InstrumentKind : 'unknown';
+  const provider = ['tiingo', 'twelvedata', 'yahoo', 'frankfurter'].includes(String(q.provider)) ? q.provider as MarketProvider : null;
+  const instrumentKind = provider === 'frankfurter' ? 'reference' : ['spot', 'futures', 'reference'].includes(String(q.instrumentKind)) ? q.instrumentKind as InstrumentKind : 'unknown';
   return {
     symbol, price: q.price,
     high: positiveNumber(q.high) ? Math.max(q.high, q.price) : q.price,

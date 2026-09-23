@@ -155,17 +155,3 @@ describe('account ownership / async-generation boundaries', () => {
     expect(localStorage.getItem(bookStorageKey('user:B'))).toBeNull();
   });
 });
-  it('refuses opens on labelled demo quotes and demo data never replaces an executable quote', async () => {
-    const store = new QuoteStore(); const hook = await mount(store);
-    act(() => {
-      store.apply({ EURUSD: quote('EURUSD', 1.1, { provider: 'demo', providerSymbol: 'DEMO:EURUSD', instrumentKind: 'reference' }) });
-      expect(hook.result.handleOpenPosition('BUY', 1)).toEqual({ ok: false, reason: 'DEMO_FEED' });
-      store.apply({ EURUSD: quote() }); // real executable quote opens normally
-      const opened = hook.result.handleOpenPosition('BUY', 1);
-      expect(opened.ok).toBe(true);
-    });
-    const demoAttempt = store.apply({ EURUSD: quote('EURUSD', 1.2, { provider: 'demo', providerSymbol: 'DEMO:EURUSD', instrumentKind: 'reference' }) });
-    expect(demoAttempt).toBe(0); // shouldAcceptQuote refuses to demote an executable quote to synthetic
-    expect(store.get('EURUSD')!.provider).toBe('twelvedata');
-    await hook.unmount();
-  });

@@ -95,7 +95,6 @@ export function usePaperTrading(store: QuoteStore, selectedSymbol: string, owner
     if (s.book.positions.length + s.book.closedPositionIds.length >= MAX_LEDGER_ROWS || s.book.positions.length + s.book.closedTrades.length >= MAX_LEDGER_ROWS) return { ok: false, reason: 'BOOK_LIMIT' };
     const now = Date.now();
     const quote = store.get(selectedSymbol);
-    if (quote?.provider === 'demo') return { ok: false, reason: 'DEMO_FEED' };
     if (!isExecutableQuote(quote, now)) return { ok: false, reason: quote ? 'STALE_PRICE' : 'NO_PRICE' };
     const valid = validateOrder({ type, price: quote.price, amount, sl, tp });
     if (!valid.ok) return valid;
@@ -113,7 +112,6 @@ export function usePaperTrading(store: QuoteStore, selectedSymbol: string, owner
     const target = s.book.positions.find(p => p.id === id);
     if (!target) return { ok: true }; // already closed: idempotent double click / replay
     const quote = store.get(target.symbol);
-    if (quote?.provider === 'demo') return { ok: false, reason: 'DEMO_FEED' };
     if (!isExecutableQuote(quote)) return { ok: false, reason: 'STALE_PRICE' };
     if (target.instrumentKind && target.instrumentKind !== quote.instrumentKind) return { ok: false, reason: 'INSTRUMENT_CHANGED' };
     const record = buildClosedTrade({ position: target, exitPrice: quote.price, quotes: store.snapshot() });

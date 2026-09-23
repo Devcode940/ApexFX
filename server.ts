@@ -19,7 +19,6 @@ import { startMarketServices } from './server/services/background';
 import { attachReadOnlySockets, websocketEnabled } from './server/services/socket';
 import { registerChat } from './server/routes/chat';
 import { isExecutableQuote, isSymbol, quoteQuality, QUOTE_MAX_AGE_MS, type MarketQuote } from './shared/market';
-import { demoCalendar, demoFeedEnabled, demoHistory } from './server/services/demoFeed';
 
 dotenv.config({ quiet: true });
 const app = express();
@@ -65,7 +64,7 @@ function health() {
   const required = (process.env.REQUIRED_MARKET_SYMBOLS || serverWatchlist.map(q => q.symbol).join(',')).split(',').map(s => s.trim());
   const ready = required.length > 0 && required.every(symbol => isExecutableQuote(serverWatchlist.find(q => q.symbol === symbol), now));
   return { status: ready ? 'ok' : 'degraded', uptime: process.uptime(), timestamp: new Date(now).toISOString(),
-    feed: { source: marketSource(), preferredProvider: 'tiingo', demo: demoFeedEnabled(), tiingo: tiingoStatus(), fresh, priced: serverWatchlist.filter(q => q.price > 0).length, total: serverWatchlist.length,
+    feed: { source: marketSource(), preferredProvider: 'tiingo', tiingo: tiingoStatus(), fresh, priced: serverWatchlist.filter(q => q.price > 0).length, total: serverWatchlist.length,
       required, yahooFailureStreak: getYahooFailureStreak(), instruments: serverWatchlist.map(q => ({ symbol: q.symbol, provider: q.provider,
         providerSymbol: q.providerSymbol, instrumentKind: q.instrumentKind, asOf: q.asOf, quality: quoteQuality(q, now) })) },
     wsClients: sockets.count() };
@@ -73,12 +72,9 @@ function health() {
 app.get('/api/health', (_req, res) => res.json(health()));
 app.get('/api/ready', (_req, res) => { const body = health(); res.status(body.status === 'ok' ? 200 : 503).json(body); });
 app.get('/api/capabilities', (_req, res) => res.json({ websocket: websocketEnabled(), wsPath: '/ws', wsTokenMethod: 'POST',
-  quoteMaxAgeMs: QUOTE_MAX_AGE_MS, timeframes: TIMEFRAMES, calendar: 'forexfactory-weekly', preferredProvider: 'tiingo', demoFeed: demoFeedEnabled(), aiRequiresAccount: process.env.AI_ALLOW_GUESTS !== 'true', deployment: process.env.VERCEL ? 'request-driven-polling' : 'node' }));
+  quoteMaxAgeMs: QUOTE_MAX_AGE_MS, timeframes: TIMEFRAMES, calendar: 'forexfactory-weekly', preferredProvider: 'tiingo', aiRequiresAccount: process.env.AI_ALLOW_GUESTS !== 'true', deployment: process.env.VERCEL ? 'request-driven-polling' : 'node' }));
 
 async function refreshForRequest() {
-  // Demo mode is an explicit dev override: it refreshes through the same path even when the
-  // persistent poller is already running or offline mode is set.
-  if (demoFeedEnabled()) { await cachedLoad(priceCache, 'market:poll-cycle', 4000, fetchRealLatestPrices); return; }
   if (process.env.MARKET_DATA_MODE === 'offline' || stopMarket) return;
   // Instance-local cache + single-flight. Paid budgets are shared in production even on cold replicas.
   await cachedLoad(priceCache, 'market:poll-cycle', 4000, fetchRealLatestPrices);
@@ -86,9 +82,8 @@ async function refreshForRequest() {
 app.get('/api/market/prices', async (_req, res) => {
   try {
     await refreshForRequest();
-    const demo = demoFeedEnabled();
-    const fresh = serverWatchlist.some(q => demo ? q.provider === 'demo' && q.price > 0 : isExecutableQuote(q));
-    res.status(fresh ? 200 : 503).json({ success: fresh, ...(demo ? { dataMode: 'demo' as const } : {}), source: marketSource(), rates: marketRates(), sentAt: Date.now(),
+    const fresh = serverWatchlist.some(q => isExecutableQuote(q));
+    res.status(fresh ? 200 : 503).json({ success: fresh, source: marketSource(), rates: marketRates(), sentAt: Date.now(),
       ...(fresh ? {} : { code: 'MARKET_STALE', error: 'No fresh, timestamped market quotes.' }) });
   } catch { res.status(502).json({ success: false, code: 'MARKET_UNAVAILABLE', error: 'Market data unavailable.' }); }
 });
@@ -107,14 +102,12 @@ app.get('/api/market/history', async (req, res) => {
   const symbol = typeof req.query.symbol === 'string' ? req.query.symbol.toUpperCase() : '';
   const timeframe = typeof req.query.timeframe === 'string' ? req.query.timeframe : '';
   if (!isSymbol(symbol) || !isTimeframe(timeframe)) return res.status(400).json({ error: 'Unsupported symbol/timeframe' });
-  if (demoFeedEnabled()) return res.json(demoHistory(symbol, timeframe));
   if (process.env.MARKET_DATA_MODE === 'offline') return res.status(503).json({ success: false, error: 'Market data disabled by operator' });
   try { res.json(await fetchMarketHistory(symbol, timeframe)); }
   catch (error) { logError('[History] Request failed:', error); res.status(502).json({ success: false, error: 'Historical providers unavailable.' }); }
 });
 app.get('/api/market/calendar', async (req, res) => {
   if (req.query.week !== undefined && req.query.week !== 'this') return res.status(400).json({ error: 'Only the current Forex Factory weekly export is supported.' });
-  if (demoFeedEnabled()) { res.setHeader('Cache-Control', 'no-store'); return res.json(demoCalendar()); }
   try {
     const result = await getWeeklyCalendar();
     res.setHeader('Cache-Control', result.stale ? 'no-store' : 'public, max-age=60, s-maxage=300');

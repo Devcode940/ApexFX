@@ -168,9 +168,7 @@ export const PositionsPanel: React.FC = () => {
     setErrorText('');
 
     if (!hasLivePrice) {
-      setErrorText(watchlistItems.some(q => q.provider === 'demo')
-        ? ORDER_REJECTION_TEXT.DEMO_FEED
-        : 'Waiting for a live market price — orders are disabled until the feed fills.');
+      setErrorText('Waiting for a live market price — orders are disabled until the feed fills.');
       return;
     }
 
