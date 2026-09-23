@@ -3,8 +3,6 @@ import {
   WatchlistItem,
   Timeframe,
   TechnicalIndicatorsState,
-  TradePosition,
-  ClosedTrade,
   Pattern,
   TradingSignal,
   Candlestick,
@@ -21,9 +19,19 @@ import { useTheme } from '../hooks/useTheme';
 import { useClock } from '../hooks/useClock';
 import { useWatchlistFeed } from '../hooks/useWatchlistFeed';
 import { useChartHistory } from '../hooks/useChartHistory';
-import { usePaperTrading, type OpenPositionResult } from '../hooks/usePaperTrading';
+import { usePaperTrading, type UsePaperTradingApi } from '../hooks/usePaperTrading';
+import { useAccountSession } from '../hooks/useAccountSession';
+import { QuoteStore } from '../utils/quoteStore';
+import { quoteQuality, isExecutableQuote, type FeedSource } from '../../shared/market';
+import { isTimeframe } from '../../shared/timeframes';
 
-interface TradingContextType {
+interface TradingContextType extends UsePaperTradingApi {
+  account: ReturnType<typeof useAccountSession>;
+  canTrade: boolean;
+  historyStatus: ReturnType<typeof useChartHistory>['historyStatus'];
+  historyError: string | null;
+  historyMeta: ReturnType<typeof useChartHistory>['historyMeta'];
+  retryHistory: () => void;
   mobileTab: 'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis';
   setMobileTab: React.Dispatch<React.SetStateAction<'chart' | 'watchlist' | 'signals' | 'trader' | 'performance' | 'analysis'>>;
   leftSidebarOpen: boolean;
@@ -40,7 +48,6 @@ interface TradingContextType {
   chartData: Record<string, Record<string, Candlestick[]>>;
   setChartData: React.Dispatch<React.SetStateAction<Record<string, Record<string, Candlestick[]>>>>;
   watchlistItems: WatchlistItem[];
-  setWatchlistItems: React.Dispatch<React.SetStateAction<WatchlistItem[]>>;
   indicators: TechnicalIndicatorsState;
   handleToggleIndicator: (key: keyof TechnicalIndicatorsState) => void;
   highlightedPattern: Pattern | null;
@@ -50,12 +57,7 @@ interface TradingContextType {
   onClearAttachedImage: () => void;
   wsConnected: boolean;
   feedStatus: 'connecting' | 'live' | 'polling' | 'degraded';
-  feedSource: 'twelvedata' | 'yahoo' | null;
-  positions: TradePosition[];
-  setPositions: React.Dispatch<React.SetStateAction<TradePosition[]>>;
-  closedTrades: ClosedTrade[];
-  setClosedTrades: React.Dispatch<React.SetStateAction<ClosedTrade[]>>;
-  handleClearHistory: () => void;
+  feedSource: FeedSource;
   tickStates: Record<string, 'up' | 'down' | 'none'>;
   utcTime: string;
   liveQuote: LiveQuote | null;
@@ -71,9 +73,6 @@ interface TradingContextType {
   activeSignal: TradingSignal;
   volatility: VolatilityDetails | null;
   priceRange: { low: number; high: number; percentage: number } | null;
-
-  handleOpenPosition: (type: 'BUY' | 'SELL', amount: number, sl?: number, tp?: number) => OpenPositionResult;
-  handleClosePosition: (id: string) => void;
 
   theme: 'dark' | 'light';
   toggleTheme: () => void;
@@ -92,6 +91,18 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const [selectedSymbol, setSelectedSymbol] = useState<string>('EURUSD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('1H');
+  const [quoteStore] = useState(() => new QuoteStore());
+  const account = useAccountSession();
+  const book = usePaperTrading(quoteStore, selectedSymbol, account.owner);
+
+  useEffect(() => {
+    const select = (event: Event) => {
+      const timeframe = (event as CustomEvent).detail?.timeframe ?? (event as CustomEvent).detail;
+      if (isTimeframe(timeframe)) setSelectedTimeframe(timeframe);
+    };
+    window.addEventListener('apexfx:timeframe', select);
+    return () => window.removeEventListener('apexfx:timeframe', select);
+  }, []);
 
   const [indicators, setIndicators] = useState<TechnicalIndicatorsState>(() => {
     try {
@@ -135,9 +146,9 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const onClearAttachedImage = React.useCallback(() => setAiSnapshot(null), []);
 
-  const { watchlistItems, setWatchlistItems, tickStates, wsConnected, feedStatus, feedSource } = useWatchlistFeed();
+  const { watchlistItems, tickStates, wsConnected, feedStatus, feedSource } = useWatchlistFeed(quoteStore, account.session?.access_token);
 
-  const { chartData, setChartData, activeData } = useChartHistory(selectedSymbol, selectedTimeframe);
+  const { chartData, setChartData, activeData, historyStatus, historyError, historyMeta, retryHistory } = useChartHistory(selectedSymbol, selectedTimeframe, quoteStore);
 
   const [isRefreshingSignal, setIsRefreshingSignal] = useState<boolean>(false);
 
@@ -151,17 +162,23 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // The header used to run a SECOND, independent 60s poll of /api/market/quote for the active
   // symbol. That cost the operator ~1,440 Twelve Data credits/day per open tab (each call is 1
   // credit, uncached, per browser), and it added no information: /api/market/quote is the very same
-  // Twelve Data source the watchlist feed is built from. It now reads from the feed we already have.
-  const liveQuote = useMemo(() => {
+  // provider/cache the watchlist feed is built from (now preferring Tiingo). Read it only once.
+  const liveQuote = (() => {
     if (!activeWatchItem || !(activeWatchItem.price > 0)) return null;
     return {
       price: activeWatchItem.price,
       change: activeWatchItem.change,
-      source: feedSource,
+      source: activeWatchItem.provider,
+      priceBasis: activeWatchItem.priceBasis,
+      providerSymbol: activeWatchItem.providerSymbol,
+      dayStatsAvailable: activeWatchItem.dayStatsAvailable,
+      asOf: activeWatchItem.asOf,
+      quality: quoteQuality(activeWatchItem),
+      instrumentKind: activeWatchItem.instrumentKind,
       high: activeWatchItem.high,
       low: activeWatchItem.low,
     };
-  }, [activeWatchItem, feedSource]);
+  })();
 
   const currentPrice = useMemo(() => {
     if (activeWatchItem && activeWatchItem.price > 0) return activeWatchItem.price;
@@ -170,38 +187,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return 0;
   }, [activeWatchItem, selectedSymbol, chartData, selectedTimeframe]);
 
-  // Update last candle with live price — but avoid replacing entire array if unchanged
-  useEffect(() => {
-    if (activeData.length === 0 || currentPrice === 0) return;
-    setChartData((prev) => {
-      const currentInstrument = prev[selectedSymbol];
-      if (!currentInstrument) return prev;
-      const currentTimeframeSeries = currentInstrument[selectedTimeframe];
-      if (!currentTimeframeSeries || currentTimeframeSeries.length === 0) return prev;
-      const last = currentTimeframeSeries[currentTimeframeSeries.length - 1];
-      // If close already matches, skip update to prevent chart teardown
-      if (Math.abs(last.close - currentPrice) < 1e-9) return prev;
-
-      const updatedSeries = [...currentTimeframeSeries];
-      const lastIndex = updatedSeries.length - 1;
-      updatedSeries[lastIndex] = {
-        ...last,
-        close: currentPrice,
-        high: Math.max(last.high, currentPrice),
-        low: Math.min(last.low, currentPrice),
-      };
-      return {
-        ...prev,
-        [selectedSymbol]: {
-          ...currentInstrument,
-          [selectedTimeframe]: updatedSeries,
-        },
-      };
-    });
-  }, [currentPrice, selectedSymbol, selectedTimeframe, activeData.length, setChartData]);
-
-  const { positions, setPositions, closedTrades, setClosedTrades, handleOpenPosition, handleClosePosition, handleClearHistory } =
-    usePaperTrading(watchlistItems, selectedSymbol, currentPrice);
+  const canTrade = book.bookReady && isExecutableQuote(activeWatchItem);
 
   const handleToggleIndicator = React.useCallback((key: keyof TechnicalIndicatorsState) => {
     setIndicators((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -218,6 +204,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const priceRange = useMemo(() => {
     if (!activeData || activeData.length === 0) return null;
+    if (activeWatchItem?.price && historyMeta && activeWatchItem.instrumentKind !== historyMeta.instrumentKind) return null;
     let minPrice = activeData[0].low;
     let maxPrice = activeData[0].high;
     for (let i = 1; i < activeData.length; i++) {
@@ -227,7 +214,7 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const range = maxPrice - minPrice;
     const currentPercentage = range > 0 ? ((currentPrice - minPrice) / range) * 100 : 50;
     return { low: minPrice, high: maxPrice, percentage: Math.max(0, Math.min(100, currentPercentage)) };
-  }, [activeData, currentPrice]);
+  }, [activeData, currentPrice, activeWatchItem, historyMeta]);
 
   const handleRefreshSignal = React.useCallback(() => {
     setIsRefreshingSignal(true);
@@ -252,7 +239,6 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         chartData,
         setChartData,
         watchlistItems,
-        setWatchlistItems,
         indicators,
         handleToggleIndicator,
         highlightedPattern,
@@ -263,11 +249,13 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         wsConnected,
         feedStatus,
         feedSource,
-        positions,
-        setPositions,
-        closedTrades,
-        setClosedTrades,
-        handleClearHistory,
+        ...book,
+        account,
+        canTrade,
+        historyStatus,
+        historyError,
+        historyMeta,
+        retryHistory,
         tickStates,
         utcTime,
         liveQuote,
@@ -279,8 +267,6 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         activeSignal,
         volatility,
         priceRange,
-        handleOpenPosition,
-        handleClosePosition,
         theme,
         toggleTheme,
       }}

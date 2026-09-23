@@ -9,33 +9,35 @@ import type {
 } from '../../types/chart';
 import { EMPTY_DRAWINGS } from '../../types/chart';
 
-const STORAGE_PREFIX = 'forexinsight_drawings_';
-
-export function loadDrawings(symbol: string): DrawingsState {
-  try {
-    const cached = localStorage.getItem(`${STORAGE_PREFIX}${symbol}`);
-    if (cached) {
-      const parsed = JSON.parse(cached) as Partial<DrawingsState>;
-      return {
-        horizontalLines: parsed.horizontalLines || [],
-        trendlines: parsed.trendlines || [],
-        annotations: parsed.annotations || [],
-        riskRewards: parsed.riskRewards || [],
-        fibonacci: parsed.fibonacci || [],
-      };
-    }
-  } catch {
-    // ignore corrupted cache
+export const drawingStorageKey = (symbol: string, owner = 'guest') => `apexfx:drawings:v2:${owner}:${symbol}`;
+const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const positive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+const point = (v: unknown) => record(v) && positive(v.time) && positive(v.price);
+const color = (v: unknown) => v === undefined || (typeof v === 'string' && v.length <= 60);
+const identity = (v: unknown) => typeof v === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(v);
+export function parseDrawings(value: unknown): DrawingsState {
+  if (!record(value)) throw new Error('Invalid drawings object');
+  const checks: Record<keyof DrawingsState, (v: unknown) => boolean> = {
+    horizontalLines: v => positive(v) || (record(v) && positive(v.price) && color(v.color)),
+    trendlines: v => record(v) && point(v.start) && point(v.end) && color(v.color),
+    annotations: v => record(v) && point(v) && typeof v.text === 'string' && v.text.length <= 240 && color(v.color),
+    riskRewards: v => record(v) && identity(v.id) && ['long', 'short'].includes(String(v.type)) && point(v.entry) && positive(v.sl) && positive(v.tp),
+    fibonacci: v => record(v) && identity(v.id) && point(v.start) && point(v.end) && color(v.color),
+  };
+  const output: Record<string, unknown[]> = {};
+  for (const key of Object.keys(checks) as (keyof DrawingsState)[]) {
+    const rows = value[key] ?? [];
+    if (!Array.isArray(rows) || rows.length > 500 || !rows.every(checks[key])) throw new Error(`Invalid ${key} drawings`);
+    output[key] = rows;
   }
-  return EMPTY_DRAWINGS;
+  return output as unknown as DrawingsState;
 }
-
-export function saveDrawings(symbol: string, drawings: DrawingsState): void {
-  try {
-    localStorage.setItem(`${STORAGE_PREFIX}${symbol}`, JSON.stringify(drawings));
-  } catch {
-    // storage may be unavailable (private mode / quota)
-  }
+export function loadDrawings(symbol: string, owner = 'guest'): DrawingsState {
+  const raw = localStorage.getItem(drawingStorageKey(symbol, owner));
+  return raw ? parseDrawings(JSON.parse(raw)) : EMPTY_DRAWINGS;
+}
+export function saveDrawings(symbol: string, drawings: DrawingsState, owner = 'guest'): void {
+  localStorage.setItem(drawingStorageKey(symbol, owner), JSON.stringify(parseDrawings(drawings)));
 }
 
 export interface ResolvedHorizontalLine {
@@ -87,7 +89,7 @@ export function createTrendlineSeries(
     });
     series.setData([
       { time: sortedPoints[0].time as UTCTimestamp, value: sortedPoints[0].price },
-      { time: sortedPoints[1].time as UTCTimestamp, value: sortedPoints[1].price },
+      ...(sortedPoints[1].time !== sortedPoints[0].time ? [{ time: sortedPoints[1].time as UTCTimestamp, value: sortedPoints[1].price }] : []),
     ]);
     return series;
   });

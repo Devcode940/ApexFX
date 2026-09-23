@@ -1,3 +1,4 @@
+import { formatPnl } from '../../utils/money';
 import React from 'react';
 import { motion } from 'motion/react';
 import { Zap, Sparkles } from 'lucide-react';
@@ -370,9 +371,7 @@ export const ChartOverlays: React.FC<ChartOverlaysProps> = ({
                           >
                             <Sparkles className="w-2.5 h-2.5 text-amber-400 animate-spin" />
                             <span>
-                              {pnl >= 0
-                                ? `+$${pnl.toFixed(2)}`
-                                : `-$${Math.abs(pnl).toFixed(2)}`}
+                              {formatPnl(trade)}
                             </span>
                             <span className="text-[7.5px] opacity-80 uppercase px-1 py-0.2 rounded bg-black/40">
                               {trade.closeReason || 'Closed'}

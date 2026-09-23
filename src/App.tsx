@@ -1,6 +1,7 @@
+import { TIMEFRAMES, TIME_CONFIG } from '../shared/timeframes';
 import React from 'react';
 import { useTrading, TradingProvider } from './context/TradingContext';
-import { Timeframe, TechnicalIndicatorsState } from './types';
+import { TechnicalIndicatorsState } from './types';
 // --- Code-split heavy panes (2026-09-16) -------------------------------------------------------
 // Before this, `vite build` emitted ONE 1,334,349-byte JS chunk (385 KB gzipped) because every pane
 // — and with them recharts — sat in the entry graph, so the first paint waited on the whole terminal.
@@ -15,7 +16,7 @@ const PositionsPanel = React.lazy(() => import('./components/PositionsPanel').th
 // and mobile; a static import at either site would drag recharts back into the entry chunk.
 const PerformanceDashboard = React.lazy(() => import('./components/PerformanceDashboard').then((m) => ({ default: m.PerformanceDashboard })));
 import { PatternPanel } from './components/PatternPanel';
-import { NewsPanel } from './components/NewsPanel';
+import { WeeklyCalendar } from './components/WeeklyCalendar';
 import { AiAssistant } from './components/AiAssistant';
 import { SupabaseSync } from './components/SupabaseSync';
 import { formatPrice } from './utils/forexData';
@@ -246,7 +247,7 @@ function TradingTerminal() {
 
           <div className="text-right font-mono flex items-center gap-3">
             <div>
-              <span className="text-[9px] text-zinc-500 uppercase block leading-none">Internal Bid</span>
+              <span className="text-[9px] text-zinc-500 uppercase block leading-none">{liveQuote?.priceBasis === 'mid' ? 'Observed midpoint' : 'Display price'}</span>
               <span className="text-xs font-bold text-zinc-100">{currentPrice > 0 ? formatPrice(currentPrice, selectedSymbol) : '—'}</span>
             </div>
             {liveQuote && (
@@ -256,10 +257,10 @@ function TradingTerminal() {
                   {/* Label comes from the server's actual source; it used to hardcode
                       "Twelve Data" while the fallback feed was Yahoo. */}
                   <span className="text-[9px] text-zinc-500 uppercase block leading-none">
-                    {liveQuote.source === 'yahoo' ? 'Yahoo Feed' : liveQuote.source === 'twelvedata' ? 'Twelve Data' : 'Upstream'}
+                    {liveQuote.source ?? 'Unknown'}{liveQuote.priceBasis === 'mid' ? ' · midpoint' : ''} · {liveQuote.instrumentKind ?? 'unknown'} · {liveQuote.quality ?? 'unknown'}
                   </span>
-                  <span className={`text-xs font-bold ${Number.isFinite(liveQuote.change) && liveQuote.change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {Number.isFinite(liveQuote.price) && liveQuote.price > 0 ? formatPrice(liveQuote.price, selectedSymbol) : '—'}
+                  <span className={`text-xs font-bold ${liveQuote.dayStatsAvailable === false ? 'text-zinc-200' : Number.isFinite(liveQuote.change) && liveQuote.change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    <span className="sr-only">Last observed price: </span>{Number.isFinite(liveQuote.price) && liveQuote.price > 0 ? formatPrice(liveQuote.price, selectedSymbol) : '—'}
                   </span>
                 </div>
               </>
@@ -297,10 +298,12 @@ function TradingTerminal() {
             {/* Timeframe selector list */}
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] uppercase font-mono font-bold tracking-wide text-zinc-400">Timeframe</span>
-              <div className="flex gap-1 bg-zinc-950 p-1 rounded-lg border border-zinc-800 w-fit">
-                {(['1m', '5m', '15m', '1H', '4H', 'D'] as Timeframe[]).map((tf) => (
+              <div className="flex flex-wrap gap-1 bg-zinc-950 p-1 rounded-lg border border-zinc-800 w-fit max-w-full">
+                {TIMEFRAMES.map((tf) => (
                   <button
                     key={tf}
+                    title={TIME_CONFIG[tf].label}
+                    aria-pressed={selectedTimeframe === tf}
                     disabled={isPending}
                     onClick={() => {
                       startTransition(() => {
@@ -381,10 +384,10 @@ function TradingTerminal() {
           {/* Bottom Grid for Secondary Panels (Visible side-by-side on desktop screen dimensions) */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             
-            {/* Pattern Scanner Panel and News Stream side panel */}
+            {/* Pattern Scanner and weekly economic calendar */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-1 gap-4">
               <PatternPanel />
-              <NewsPanel />
+              <WeeklyCalendar />
             </div>
 
             {/* AI Assistant Chat pane */}

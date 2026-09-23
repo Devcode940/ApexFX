@@ -215,7 +215,7 @@ export const SignalPanel: React.FC<SignalPanelProps> = React.memo(({ onCollapseO
             </div>
           </div>
           <div className="w-full md:w-36 space-y-1">
-            <div className="flex justify-between text-[11px] font-mono text-zinc-400"><span>Confidence</span><span className={`font-bold ${typeTextColor}`}>{signal.confidence}%</span></div>
+            <div className="flex justify-between text-[11px] font-mono text-zinc-400"><span>Heuristic confluence</span><span className={`font-bold ${typeTextColor}`}>{signal.confidence}/100</span></div>
             <div className="w-full bg-zinc-900 h-2 rounded-full overflow-hidden border border-zinc-800"><div className={`h-full rounded-full transition-all duration-1000 ${isBuy ? 'bg-emerald-500' : isSell ? 'bg-rose-500' : 'bg-zinc-500'}`} style={{ width: `${signal.confidence}%` }} /></div>
           </div>
         </div>

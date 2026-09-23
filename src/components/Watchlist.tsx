@@ -1,3 +1,4 @@
+import { quoteQuality } from '../../shared/market';
 import React from 'react';
 import { useTrading } from '../context/TradingContext';
 import { TrendingUp, TrendingDown, ArrowRightLeft, PanelLeftClose } from 'lucide-react';
@@ -17,7 +18,8 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
     startTransition,
     mobileTab,
     setMobileTab,
-    wsConnected,
+    feedStatus,
+    feedSource,
   } = useTrading();
 
   const onSelectSymbol = (sym: string) => {
@@ -48,17 +50,18 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
             <ArrowRightLeft className="w-4 h-4 text-emerald-400" />
           )}
           <h2 className="font-display font-semibold text-sm tracking-wide uppercase text-zinc-200">
-            Live FX Pairs
+            Market watchlist
           </h2>
         </div>
         <span className="text-[10px] bg-zinc-800 text-zinc-400 font-mono px-1.5 py-0.5 rounded font-semibold animate-pulse uppercase">
-          Ticking Live
+          {feedStatus}
         </span>
       </div>
 
       {/* Grid List */}
       <div className="divide-y divide-zinc-800/60 overflow-y-auto flex-1 text-xs">
         {items.map((item) => {
+          const quality = quoteQuality(item);
           const isSelected = item.symbol === selectedSymbol;
           const isPositive = item.change >= 0;
           const tick = tickStates[item.symbol];
@@ -70,6 +73,8 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
           return (
             <button
               key={item.symbol}
+              aria-pressed={isSelected}
+              title={`${item.provider ?? 'unknown provider'} · ${item.instrumentKind ?? 'unknown instrument'} · ${quality} · ${item.asOf ? new Date(item.asOf).toISOString() : 'No observation time'}`}
               onClick={() => onSelectSymbol(item.symbol)}
               className={`w-full text-left px-4 py-3 flex items-center justify-between transition-colors outline-none cursor-pointer hover:bg-zinc-900 ${
                 isSelected ? 'bg-zinc-900/90 border-l-2 border-emerald-500' : ''
@@ -82,11 +87,11 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
                     {item.symbol.slice(0, 3)}/{item.symbol.slice(3)}
                   </span>
                   <span className="text-[10px] text-zinc-500 font-mono">
-                    {item.spread.toFixed(1)} pip
+                    {item.instrumentKind ?? 'unknown'}
                   </span>
                 </div>
                 <div className="text-[10px] text-zinc-400 uppercase truncate max-w-[120px]">
-                  {item.name}
+                  {item.provider ?? 'No source'} · {item.priceBasis === 'mid' ? 'mid · ' : ''}{quality}
                 </div>
               </div>
 
@@ -96,12 +101,11 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
                 </div>
                 <div
                   className={`inline-flex items-center gap-0.5 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                    isPositive ? 'bg-emerald-950/40 text-emerald-400' : 'bg-red-950/40 text-red-400'
+                    item.dayStatsAvailable === false ? 'bg-zinc-900 text-zinc-400' : isPositive ? 'bg-emerald-950/40 text-emerald-400' : 'bg-red-950/40 text-red-400'
                   }`}
                 >
-                  {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  {isPositive ? '+' : ''}
-                  {item.change.toFixed(2)}%
+                  {item.dayStatsAvailable !== false && (isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />)}
+                  {item.dayStatsAvailable === false ? '— day change' : `${isPositive ? '+' : ''}${item.change.toFixed(2)}%`}
                 </div>
               </div>
             </button>
@@ -109,17 +113,19 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
         })}
       </div>
 
-      {/* Live feed status (real data only) */}
+      {/* Transport status is distinct from provider cadence/freshness. */}
       <div className="p-3 bg-zinc-900/45 border-t border-zinc-800 text-[11px] text-zinc-500 space-y-1 font-mono">
+        {feedSource === 'demo' && <p className="text-amber-400">DEMO DATA — synthetic series; quotes cannot execute orders.</p>}
+        {items.some(item => item.provider === 'tiingo') && <p className="text-[10px]">Tiingo: polled REST snapshots, not tick streaming.</p>}
         <div className="flex justify-between">
           <span>Feed:</span>
-          <span className={wsConnected ? 'text-emerald-400' : 'text-amber-500'}>
-            {wsConnected ? 'WebSocket LIVE' : 'HTTP Polling'}
+          <span className={feedStatus === 'live' ? 'text-emerald-400' : 'text-amber-500'}>
+            {feedStatus}
           </span>
         </div>
         <div className="flex justify-between">
           <span>Source:</span>
-          <span>Yahoo Finance</span>
+          <span>{feedSource ?? 'Unavailable'}</span>
         </div>
       </div>
     </div>

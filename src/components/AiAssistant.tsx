@@ -14,6 +14,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 
+import { boundedChatMessages, CHAT_MAX_MESSAGE_CHARS, CHAT_MAX_IMAGE_BYTES } from '../../shared/chat';
 import { useTrading } from '../context/TradingContext';
 
 interface ChatMessage {
@@ -32,6 +33,7 @@ export const AiAssistant: React.FC = () => {
     activeSignal,
     aiSnapshot: attachedImage,
     onClearAttachedImage,
+    account,
   } = useTrading();
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -40,7 +42,7 @@ export const AiAssistant: React.FC = () => {
     return [
       {
         sender: 'ai',
-        text: `Greetings! I am the **ApexFX AI Analyst**. Ask me anything about technical analysis, confluence, or risk.\n\nUse **Strategy Templates** below for quick scans. Chart snapshots can be attached for visual analysis.\n\n> **Disclaimer:** Win rates / profit factors shown in the terminal are heuristic estimates, not backtested results, and not financial advice.`,
+        text: `Greetings! I am the **ApexFX AI Analyst**. Ask me anything about technical analysis, confluence, or risk.\n\nUse **Strategy Templates** below for quick scans. Chart snapshots can be attached for visual analysis.\n\n> **Disclaimer:** Pattern scores are unvalidated heuristics, not win probabilities. Ledger statistics describe paper results, not future returns.`,
         time: now,
       },
     ];
@@ -52,27 +54,39 @@ export const AiAssistant: React.FC = () => {
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasInitializedContextRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>(messages);
+  const pending = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const publish = useCallback((action: React.SetStateAction<ChatMessage[]>) => {
+    const next = typeof action === 'function' ? action(messagesRef.current) : action;
+    messagesRef.current = next.slice(-40); setMessages(messagesRef.current);
+  }, []);
+  const cancel = useCallback(() => {
+    generation.current++; pending.current?.abort(); pending.current = null;
+  }, []);
   useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
+    cancel(); setIsTyping(false); setInputText('');
+    publish([{ sender: 'ai', text: 'Educational assistant. Sign in to use paid AI unless the operator explicitly enables capped guest access. Conversation context is limited to 12 messages / 12,000 characters; old images are not resent.', time: new Date().toLocaleTimeString() }]);
+    onClearAttachedImage();
+    return cancel;
+  }, [account.owner, cancel, publish, onClearAttachedImage]);
 
   // Update greeting with live context only once, without wiping history
   useEffect(() => {
     if (hasInitializedContextRef.current) return;
     if (!activeSignal) return;
     hasInitializedContextRef.current = true;
-    setMessages((prev) => {
+    publish((prev) => {
       if (prev.length > 1) return prev; // Don't overwrite if user already chatted
       const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return [
         {
           sender: 'ai',
-          text: `Greetings! I am the **ApexFX AI Analyst**. I have scanned **${symbol}** on **${timeframe}** — current consensus: **${activeSignal.type}** (${activeSignal.confidence}% at ${activeSignal.price}). 📊\n\nUse **Expert Strategy Templates** below or ask any technical question. You can also attach a chart snapshot for visual analysis.\n\n> **Note:** Pattern win rates are heuristic estimates, not backtested guarantees.`,
+          text: `Greetings! I am the **ApexFX AI Analyst**. Displayed heuristic for **${symbol}** on **${timeframe}** — current consensus: **${activeSignal.type}** (${activeSignal.confidence}/100 at ${activeSignal.price}). 📊\n\nUse **Expert Strategy Templates** below or ask any technical question. You can also attach a chart snapshot for visual analysis.\n\n> **Note:** Pattern scores are not win probabilities or validated forecasts.`,
           time: now,
         },
       ];
     });
-  }, [symbol, timeframe, activeSignal]);
+  }, [symbol, timeframe, activeSignal, publish]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -80,7 +94,8 @@ export const AiAssistant: React.FC = () => {
 
   const handleNewChat = useCallback(() => {
     const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    setMessages([
+    cancel(); setIsTyping(false);
+    publish([
       {
         sender: 'ai',
         text: `New session started for **${symbol}** (${timeframe}). How can I help?`,
@@ -88,10 +103,10 @@ export const AiAssistant: React.FC = () => {
       },
     ]);
     onClearAttachedImage?.();
-  }, [symbol, timeframe, onClearAttachedImage]);
+  }, [symbol, timeframe, onClearAttachedImage, cancel, publish]);
 
   const handleSendMessage = async (textToSend = inputText, imageToSend: string | null = attachedImage) => {
-    if (isTyping) return; // prevent double-send
+    if (pending.current) return; // synchronous latch: double clicks before render are also blocked
     if (!textToSend.trim() && !imageToSend) return;
 
     const userMsgTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -102,45 +117,32 @@ export const AiAssistant: React.FC = () => {
       ...(imageToSend ? { image: imageToSend } : {}),
     };
 
+    if (textToSend.length > CHAT_MAX_MESSAGE_CHARS || (imageToSend && imageToSend.length * .75 > CHAT_MAX_IMAGE_BYTES + 32)) {
+      publish(prev => [...prev, { sender: 'ai', text: 'Message or snapshot too large. Use at most 4,000 characters and a smaller chart snapshot (256 KB).', time: userMsgTime }]);
+      return;
+    }
+    const controller = new AbortController();
+    pending.current = controller;
+    const epoch = generation.current;
     const updatedMessages = [...messagesRef.current, userMsg];
-    setMessages(updatedMessages);
-    setInputText('');
-    onClearAttachedImage?.();
-    setIsTyping(true);
-
+    publish(updatedMessages); setInputText(''); onClearAttachedImage(); setIsTyping(true);
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    const current = () => generation.current === epoch && pending.current === controller;
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 50000);
-
       const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: updatedMessages.map((m) => ({ sender: m.sender, text: m.text, image: m.image })),
-          selectedSymbol: symbol,
-          selectedTimeframe: timeframe,
-          activeSignal,
-        }),
-        signal: controller.signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(account.session?.access_token ? { Authorization: `Bearer ${account.session.access_token}` } : {}) },
+        body: JSON.stringify({ messages: boundedChatMessages(updatedMessages), selectedSymbol: symbol, selectedTimeframe: timeframe }), signal: controller.signal,
       });
-
-      clearTimeout(timeout);
-      const resData = await response.json().catch(() => ({}));
-      if (!response.ok || resData.error) {
-        throw new Error(resData.error || `AI request failed (HTTP ${response.status})`);
-      }
-
-      const aiMsgTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      setMessages((prev) => [...prev, { sender: 'ai', text: resData.text, time: aiMsgTime }]);
-    } catch (err: any) {
-      const reason = err?.name === 'AbortError' ? 'Request timed out' : err?.message || 'AI service unavailable';
-      const aiMsgTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      setMessages((prev) => [
-        ...prev,
-        { sender: 'ai', text: `⚠️ **Live AI service error**: ${reason}`, time: aiMsgTime },
-      ]);
+      const result = await response.json();
+      if (!current()) return;
+      if (controller.signal.aborted) throw new Error('Request timed out.');
+      if (!response.ok || typeof result.text !== 'string') throw new Error(result.error || `AI request failed (${response.status})`);
+      publish(prev => [...prev, { sender: 'ai', text: result.text.slice(0, 8000), time: new Date().toLocaleTimeString() }]);
+    } catch (error) {
+      if (current()) publish(prev => [...prev, { sender: 'ai', text: `AI service: ${controller.signal.aborted ? 'Request timed out.' : error instanceof Error ? error.message : 'Unavailable.'}`, time: new Date().toLocaleTimeString() }]);
     } finally {
-      setIsTyping(false);
+      clearTimeout(timeout);
+      if (current()) { pending.current = null; setIsTyping(false); }
     }
   };
 
@@ -239,7 +241,7 @@ export const AiAssistant: React.FC = () => {
         <div className="grid grid-cols-2 gap-1.5 max-h-[105px] overflow-y-auto scrollbar-thin">
           {activeCategory === 'analysis' && (
             <>
-              <button disabled={isTyping} onClick={() => handleSendMessage('Run a multi-indicator confluence check to find matching confirmation signals. Note that win rates are heuristic estimates.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group disabled:opacity-50 disabled:cursor-not-allowed">
+              <button disabled={isTyping} onClick={() => handleSendMessage('Run a multi-indicator confluence check to find matching confirmation signals. Explain that confluence scores are not probabilities.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group disabled:opacity-50 disabled:cursor-not-allowed">
                 <div className="flex items-center gap-1.5 mb-1"><ShieldCheck className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">Indicator Confluence</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">Combine RSI, EMA50 & SMA20 strategy.</p>
               </button>
@@ -263,8 +265,8 @@ export const AiAssistant: React.FC = () => {
           )}
           {activeCategory === 'risk' && (
             <>
-              <button disabled={isTyping} onClick={() => handleSendMessage('Scan for the most profitable candlestick patterns in the active history. Remind that win rates are heuristic estimates, not backtested guarantees.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
-                <div className="flex items-center gap-1.5 mb-1"><Award className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">High Probability Scan</span></div>
+              <button disabled={isTyping} onClick={() => handleSendMessage('Explain candle-pattern confluence. Do not claim to see history not provided, or invent win probabilities.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
+                <div className="flex items-center gap-1.5 mb-1"><Award className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-bold text-zinc-200">Confluence Scan</span></div>
                 <p className="text-[9px] text-zinc-500 leading-tight">List the scanned candlestick shapes.</p>
               </button>
               <button disabled={isTyping} onClick={() => handleSendMessage('Calculate recommended lot size and risk-reward ratio assuming a 1% risk on a $10,000 account.')} className="p-2 bg-zinc-950/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-mono rounded-lg cursor-pointer transition-all flex flex-col text-left group">
@@ -295,8 +297,8 @@ export const AiAssistant: React.FC = () => {
       )}
 
       <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="p-3 bg-zinc-900 border-t border-zinc-800 flex gap-2">
-        <input type="text" disabled={isTyping} placeholder={isTyping ? 'AI is thinking…' : 'Ask AI Analyst (e.g. "RSI check", "Support lines")...'} value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-zinc-950 text-xs border border-zinc-800 focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed" />
-        <button type="submit" disabled={isTyping} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-3.5 py-2 transition-all flex items-center justify-center cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
+        <input type="text" aria-label="Message to AI assistant" maxLength={CHAT_MAX_MESSAGE_CHARS} disabled={isTyping} placeholder={isTyping ? 'AI is thinking…' : 'Ask AI Analyst (e.g. "RSI check", "Support lines")...'} value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-zinc-950 text-xs border border-zinc-800 focus:border-zinc-700 outline-none rounded-lg px-3 py-2 text-zinc-200 disabled:opacity-60 disabled:cursor-not-allowed" />
+        <button type="submit" aria-label="Send message" disabled={isTyping} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-3.5 py-2 transition-all flex items-center justify-center cursor-pointer"><Send className="w-3.5 h-3.5" /></button>
       </form>
     </div>
   );

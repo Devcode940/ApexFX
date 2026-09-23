@@ -1,3 +1,4 @@
+import { isTimeframe } from '../../shared/timeframes';
 /**
  * XSS-safe string sanitization utility.
  * Escapes HTML special characters to prevent script injection
@@ -64,6 +65,5 @@ export const sanitizeSymbol = (symbol: string): string => {
  * Sanitize a timeframe — only allow known valid values.
  */
 export const sanitizeTimeframe = (tf: string): string => {
-  const valid = ['1m', '5m', '15m', '1H', '4H', 'D', 'W', 'M'];
-  return valid.includes(tf) ? tf : '1H';
+  return isTimeframe(tf) ? tf : '1H';
 };

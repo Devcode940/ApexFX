@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from 'react';
+import { hasAccountPnl } from '../utils/money';
+import { downloadTradesCsv } from '../utils/csv';
 import { useTrading } from '../context/TradingContext';
 import {
   Trophy,
@@ -25,8 +27,9 @@ import {
 } from 'recharts';
 
 // Helper to format duration in human-readable units
-export const formatDuration = (ms: number): string => {
-  if (!ms || isNaN(ms) || ms <= 0) return '0m';
+export const formatDuration = (ms: number | null | undefined): string => {
+  if (ms == null || !Number.isFinite(ms)) return '—';
+  if (ms <= 0) return '0m';
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
@@ -71,11 +74,11 @@ export const PerformanceDashboard: React.FC = () => {
       const now = Date.now();
       const oneDay = 86400000;
       if (timeFilter === 'today') {
-        list = list.filter((t) => (t.closedAt ? now - t.closedAt <= oneDay : true));
+        list = list.filter((t) => (t.closedAt ? now - t.closedAt <= oneDay : false));
       } else if (timeFilter === 'week') {
-        list = list.filter((t) => (t.closedAt ? now - t.closedAt <= oneDay * 7 : true));
+        list = list.filter((t) => (t.closedAt ? now - t.closedAt <= oneDay * 7 : false));
       } else if (timeFilter === 'month') {
-        list = list.filter((t) => (t.closedAt ? now - t.closedAt <= oneDay * 30 : true));
+        list = list.filter((t) => (t.closedAt ? now - t.closedAt <= oneDay * 30 : false));
       }
     }
 
@@ -96,8 +99,8 @@ export const PerformanceDashboard: React.FC = () => {
     const useClosed = tradeScope === 'closed' || tradeScope === 'combined';
     const useOpen = tradeScope === 'open' || tradeScope === 'combined';
 
-    const closedList = useClosed ? filteredClosedTrades : [];
-    const openList = useOpen ? filteredPositions : [];
+    const closedList = useClosed ? filteredClosedTrades.filter(hasAccountPnl) : [];
+    const openList = useOpen ? filteredPositions.filter(hasAccountPnl) : [];
 
     // Realized P&L
     const realizedPnl = closedList.reduce((acc, t) => acc + (t.pnl || 0), 0);
@@ -154,12 +157,12 @@ export const PerformanceDashboard: React.FC = () => {
     const lossRate = totalEvaluated > 0 ? (totalLosing / totalEvaluated) * 100 : 0;
 
     // Profit Factor
-    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99.9 : 0;
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : null;
 
     // Average Win vs Average Loss
     const avgWin = winningClosed > 0 ? grossProfit / winningClosed : 0;
     const avgLoss = losingClosed > 0 ? grossLoss / losingClosed : 0;
-    const winLossRatio = avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? 99.9 : 0;
+    const winLossRatio = avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? Infinity : null;
 
     // Holding Durations (ms)
     let totalDurationMs = 0;
@@ -181,7 +184,7 @@ export const PerformanceDashboard: React.FC = () => {
       if (!dur && t.openedAt && t.closedAt) {
         dur = t.closedAt - t.openedAt;
       }
-      if (!dur) dur = 3600000; // default 1 hr fallback
+      if (dur === undefined || !Number.isFinite(dur) || dur < 0) return; // unknown is not a fabricated hour
 
       totalDurationMs += dur;
       durationCount++;
@@ -206,7 +209,8 @@ export const PerformanceDashboard: React.FC = () => {
     if (useOpen) {
       const now = Date.now();
       openList.forEach((p) => {
-        const dur = p.openedAt ? now - p.openedAt : 1800000;
+        if (!p.openedAt) return;
+        const dur = Math.max(0, now - p.openedAt);
         totalDurationMs += dur;
         durationCount++;
         if (dur < shortestMs) shortestMs = dur;
@@ -216,26 +220,26 @@ export const PerformanceDashboard: React.FC = () => {
 
     if (shortestMs === Infinity) shortestMs = 0;
 
-    const avgHoldingMs = durationCount > 0 ? totalDurationMs / durationCount : 0;
-    const avgWinningHoldingMs = winningDurationCount > 0 ? winningDurationMs / winningDurationCount : 0;
-    const avgLosingHoldingMs = losingDurationCount > 0 ? losingDurationMs / losingDurationCount : 0;
+    const avgHoldingMs = durationCount > 0 ? totalDurationMs / durationCount : null;
+    const avgWinningHoldingMs = winningDurationCount > 0 ? winningDurationMs / winningDurationCount : null;
+    const avgLosingHoldingMs = losingDurationCount > 0 ? losingDurationMs / losingDurationCount : null;
 
     // Symbol Performance Breakdown
     const symbolMap: Record<
       string,
-      { count: number; wins: number; losses: number; pnl: number; totalDur: number }
+      { count: number; wins: number; losses: number; pnl: number; totalDur: number; durationCount: number }
     > = {};
 
     closedList.forEach((t) => {
       if (!symbolMap[t.symbol]) {
-        symbolMap[t.symbol] = { count: 0, wins: 0, losses: 0, pnl: 0, totalDur: 0 };
+        symbolMap[t.symbol] = { count: 0, wins: 0, losses: 0, pnl: 0, totalDur: 0, durationCount: 0 };
       }
       const item = symbolMap[t.symbol];
       item.count++;
       if (t.pnl > 0) item.wins++;
       else if (t.pnl < 0) item.losses++;
       item.pnl += t.pnl;
-      item.totalDur += t.durationMs || 3600000;
+      if (t.durationMs !== undefined) { item.totalDur += t.durationMs; item.durationCount++; }
     });
 
     const symbolBreakdown = Object.entries(symbolMap).map(([sym, val]) => ({
@@ -243,7 +247,7 @@ export const PerformanceDashboard: React.FC = () => {
       count: val.count,
       winRate: val.count > 0 ? (val.wins / val.count) * 100 : 0,
       pnl: parseFloat(val.pnl.toFixed(2)),
-      avgDur: val.count > 0 ? val.totalDur / val.count : 0
+      avgDur: val.durationCount > 0 ? val.totalDur / val.durationCount : null
     }));
 
     // Long vs Short Performance
@@ -292,8 +296,8 @@ export const PerformanceDashboard: React.FC = () => {
       avgHoldingMs,
       avgWinningHoldingMs,
       avgLosingHoldingMs,
-      shortestMs,
-      longestMs,
+      shortestMs: durationCount ? shortestMs : null,
+      longestMs: durationCount ? longestMs : null,
       scalpCount,
       dayCount,
       swingCount,
@@ -309,7 +313,7 @@ export const PerformanceDashboard: React.FC = () => {
 
   // Cumulative Equity Chart Data points — fallback for legacy localStorage without closedAt
   const equityCurveData = useMemo(() => {
-    const list = [...filteredClosedTrades].sort((a, b) => {
+    const list = filteredClosedTrades.filter(hasAccountPnl).filter(t => t.closedAt !== undefined).sort((a, b) => {
       const aTime = a.closedAt ?? a.openedAt ?? 0;
       const bTime = b.closedAt ?? b.openedAt ?? 0;
       return aTime - bTime;
@@ -333,29 +337,7 @@ export const PerformanceDashboard: React.FC = () => {
     return [initialPoint, ...points];
   }, [filteredClosedTrades]);
 
-  const handleExportCSV = () => {
-    const headers = ['Trade ID', 'Symbol', 'Type', 'Entry Price', 'Exit Price', 'Amount', 'PnL ($)', 'Time', 'Duration'];
-    const rows = filteredClosedTrades.map((t) => [
-      t.id,
-      t.symbol,
-      t.type,
-      t.entryPrice,
-      t.exitPrice,
-      t.amount,
-      t.pnl,
-      t.time,
-      formatDuration(t.durationMs || 3600000)
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `apex_fx_performance_report_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+  const handleExportCSV = () => downloadTradesCsv(filteredClosedTrades, `apex_fx_performance_report_${Date.now()}.csv`);
 
   return (
     <div
@@ -364,6 +346,8 @@ export const PerformanceDashboard: React.FC = () => {
       } space-y-6 shadow-2xl transition-all`}
       id="performance_dashboard_container"
     >
+      {[...filteredClosedTrades, ...filteredPositions].some(t => !hasAccountPnl(t)) && <p role="status" className="text-xs text-amber-400">Partial USD analytics: unconverted legacy/cross-currency records are excluded from USD totals, rankings, and win-rate denominators. They remain in the ledger and exports.</p>}
+      <p className="text-[11px] text-zinc-500">Paper results, not broker performance. Marks may be stale. Equity curves exclude unknown close dates; missing durations are not estimated.</p>
       {/* 1. DASHBOARD HEADER & FILTER CONTROLS */}
       <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 pb-4 border-b border-zinc-800/70">
         <div className="flex items-center gap-3">
@@ -473,7 +457,7 @@ export const PerformanceDashboard: React.FC = () => {
                   : 'bg-rose-950 text-rose-400 border border-rose-900/60'
               }`}
             >
-              {metrics.winRate >= 50 ? 'HIGH ACCURACY' : 'ATTENTION'}
+              PAPER OUTCOMES
             </span>
           </div>
 
@@ -489,7 +473,7 @@ export const PerformanceDashboard: React.FC = () => {
             <div className="text-right font-mono">
               <span className="text-[10px] text-zinc-500 uppercase block">Profit Factor</span>
               <span className="text-sm font-extrabold text-emerald-400">
-                {metrics.profitFactor > 50 ? '> 50x' : `${metrics.profitFactor.toFixed(2)}x`}
+                {metrics.profitFactor === null ? 'N/A' : !Number.isFinite(metrics.profitFactor) ? '∞ (no losses)' : `${metrics.profitFactor.toFixed(2)}x`}
               </span>
             </div>
           </div>

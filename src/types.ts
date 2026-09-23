@@ -1,15 +1,21 @@
-export type Timeframe = '1m' | '5m' | '15m' | '1H' | '4H' | 'D';
+import type { QuoteMetadata, FeedSource, InstrumentKind } from '../shared/market';
+import type { ConversionSnapshot } from './utils/money';
+
+export type { Timeframe } from '../shared/timeframes';
 
 export interface Candlestick {
-  time: number; // UTC timestamp in seconds (or string for Daily e.g. 'YYYY-MM-DD')
+  time: number; // UTC timestamp in seconds for every chart period, including D/W
   open: number;
   high: number;
   low: number;
   close: number;
   volume?: number;
+  /** Observed/current or incomplete first-week bar, not an authoritative complete OHLC interval. */
+  provisional?: boolean;
+  updatedAt?: number;
 }
 
-export interface WatchlistItem {
+export interface WatchlistItem extends Partial<QuoteMetadata> {
   symbol: string;
   name: string;
   price: number;
@@ -48,13 +54,13 @@ export interface Pattern {
   time: number; // Candlestick time when occurred
   description: string;
   candlestickIndex: number;
-  winRate?: number; // e.g., 78 for 78%
+  confluence?: number; // Heuristic score out of 100, NOT a win probability.
   reliability?: 'Low' | 'Medium' | 'High';
   // Deliberately no `profitFactor` on a detected pattern: it cannot be measured without a backtest,
   // and an earlier version fabricated it from the win rate. Ledger-level PF (real) is in
   // PerformanceDashboard's metrics, computed from closed trades.
   volumeConfirm?: boolean;
-  score?: number; // profitability score
+  score?: number; // Heuristic ranking, not measured profitability
   indicatorsConfirm?: string[];
 }
 
@@ -71,7 +77,7 @@ export interface TradingSignal {
   price: number;
   tp: number; // Take Profit
   sl: number; // Stop Loss
-  confidence: number; // 0 to 100
+  confidence: number; // Heuristic confluence strength 0..100, NOT a probability
   time: string;
   rationale: string[];
   breakdown?: SignalBreakdownItem[]; // structured sentiment, not parsed from strings
@@ -84,22 +90,38 @@ export interface TradePosition {
   type: 'BUY' | 'SELL';
   entryPrice: number;
   currentPrice: number;
-  amount: number; // size in lots or units
+  /** Observation backing the in-memory mark; persisted snapshots deliberately clear it. */
+  markAsOf?: number | null;
+  amount: number; // standard lots; shared instrument metadata defines the contract multiplier
   sl?: number;
   tp?: number;
-  pnl: number;
+  pnl: number | null;
+  pnlVersion?: 2;
+  accountCurrency?: 'USD';
+  quoteCurrency?: string;
+  pnlQuote?: number;
+  conversion?: ConversionSnapshot | null;
+  instrumentKind?: InstrumentKind;
   time: string;
   openedAt?: number; // epoch ms
 }
 
 export interface ClosedTrade {
   id: string;
+  /** Stable original position identity; prevents resurrection and duplicate closes. */
+  positionId?: string;
   symbol: string;
   type: 'BUY' | 'SELL';
   entryPrice: number;
   exitPrice: number;
   amount: number;
-  pnl: number;
+  pnl: number | null;
+  pnlVersion?: 2;
+  accountCurrency?: 'USD';
+  quoteCurrency?: string;
+  pnlQuote?: number;
+  conversion?: ConversionSnapshot | null;
+  instrumentKind?: InstrumentKind;
   time: string;
   closeReason: 'Manual' | 'SL Hit' | 'TP Hit';
   openedAt?: number; // epoch ms
@@ -108,10 +130,16 @@ export interface ClosedTrade {
 }
 
 export interface LiveQuote {
+  providerSymbol?: string | null;
+  dayStatsAvailable?: boolean;
   price: number;
   change: number;
+  priceBasis?: 'mid' | 'last';
   /** Which upstream the server used, so the HUD can label itself truthfully. */
-  source?: 'twelvedata' | 'yahoo' | null;
+  source?: FeedSource;
+  asOf?: number | null;
+  quality?: string;
+  instrumentKind?: InstrumentKind;
   high?: number;
   low?: number;
 }

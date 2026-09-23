@@ -1,311 +1,189 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { WatchlistItem } from '../types';
+import { useState, useEffect, useMemo } from 'react';
+import type { WatchlistItem } from '../types';
 import { createWatchlistFromConfig } from '../utils/forexData';
+import { isExecutableQuote, parseQuote, sourceOf, QUOTE_MAX_AGE_MS } from '../../shared/market';
+import type { QuoteStore } from '../utils/quoteStore';
 
 export type FeedStatus = 'connecting' | 'live' | 'polling' | 'degraded';
+export function retryAfterMs(value: string | null, now = Date.now()): number {
+  if (!value) return 0;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, numeric * 1000) : Math.max(0, (Date.parse(value) || now) - now);
+}
 
-const POLL_BASE_MS = 2500;
-const POLL_MAX_MS = 15_000;
-const RECONNECT_BASE_MS = 5_000;
-const RECONNECT_MAX_MS = 60_000;
-
-/**
- * Live price feed: WebSocket first, HTTP polling as the reliable fallback.
- *
- * Rewritten in the 2026-09-13 pass. The previous version polled unconditionally every 2.5s and
- * swallowed every error (`catch { /* silent catch to prevent console spam *\/ }`), so a 429 or an
- * upstream outage looked identical to a working feed — prices simply froze with no signal. It also
- * retried the WebSocket every 5s forever, and each retry requested a fresh `/api/ws/token`, which
- * turned a server-side limit into a self-inflicted storm.
- *
- * Now: exponential backoff driven by the server's Retry-After, paused while the tab is hidden,
- * and a `feedStatus` the UI can tell the truth with.
- */
-export function useWatchlistFeed() {
-  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() => createWatchlistFromConfig());
+/** One validated ordered event boundary; rendering is downstream of execution, not its clock. */
+export function useWatchlistFeed(store: QuoteStore, accessToken?: string) {
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(createWatchlistFromConfig);
   const [tickStates, setTickStates] = useState<Record<string, 'up' | 'down' | 'none'>>({});
-  const [wsConnected, setWsConnected] = useState<boolean>(false);
-  const [feedStatus, setFeedStatus] = useState<FeedStatus>('connecting');
-  const [feedSource, setFeedSource] = useState<'twelvedata' | 'yahoo' | null>(null);
-
-  const watchlistRef = useRef(watchlistItems);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [transport, setTransport] = useState<FeedStatus>('connecting');
+  const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    watchlistRef.current = watchlistItems;
-  }, [watchlistItems]);
+    let previous = new Map(store.snapshot().map(q => [q.symbol, q.price]));
+    let flashTimer: ReturnType<typeof setTimeout>;
+    const unsubscribe = store.subscribe(({ quotes, changed }) => {
+      const map = new Map(quotes.map(q => [q.symbol, q]));
+      const flashes = Object.fromEntries(changed.map(q => [q.symbol, !previous.has(q.symbol) || previous.get(q.symbol) === q.price ? 'none' : q.price > previous.get(q.symbol)! ? 'up' : 'down'])) as Record<string, 'up' | 'down' | 'none'>;
+      previous = new Map(quotes.map(q => [q.symbol, q.price]));
+      setWatchlistItems(prev => prev.map(item => ({ ...item, ...map.get(item.symbol) })));
+      setTickStates(flashes); setNow(Date.now());
+      clearTimeout(flashTimer); flashTimer = setTimeout(() => setTickStates({}), 900);
+    });
+    return () => { unsubscribe(); clearTimeout(flashTimer); };
+  }, [store]);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
 
-  // --- Initial pre-population from the ECB/Frankfurter (or ForexRate) snapshot ---
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    setWsConnected(false); setTransport('connecting');
+    let socket: WebSocket | null = null;
+    let visible = !document.hidden;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let pollInFlight = false;
+    let connectInFlight = false;
+    let socketFresh = false;
+    let wsAllowed = false;
+    let wsDisabled = false;
+    let attempts = 0;
+    let pollDelay = 2500;
+    let notBefore = 0;
+    let reconnectNotBefore = 0;
+    let lastFrame = 0;
+    const requests = new Set<AbortController>();
+    const request = async (url: string, init: RequestInit = {}) => {
+      const controller = new AbortController();
+      requests.add(controller);
+      const timer = setTimeout(() => controller.abort(), 12_000);
       try {
-        const response = await fetch('/api/forex');
-        const data = await response.json();
-        if (cancelled || !data?.success || !data?.rates) return;
-        setWatchlistItems((prev) =>
-          prev.map((item) => {
-            const realPrice = data.rates[item.symbol];
-            return realPrice ? { ...item, price: realPrice } : item;
-          })
-        );
-      } catch (err) {
-        // Non-fatal: the live feed is authoritative. Surfaced (not swallowed) so a broken
-        // snapshot endpoint is visible in the console instead of looking like slow prices.
-        console.warn('[ApexFX] initial rate snapshot unavailable; waiting for the live feed.', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
+        const response = await fetch(url, { ...init, signal: controller.signal });
+        const body = await response.json();
+        if (cancelled || controller.signal.aborted) throw new Error('Request cancelled');
+        return { response, body };
+      } finally { clearTimeout(timer); requests.delete(controller); }
     };
-  }, []);
-
-  // --- apply an incoming rates map ---
-  const applyRates = useCallback((rates: Record<string, any>, source?: string) => {
-    if (!rates || typeof rates !== 'object') return;
-    if (source === 'twelvedata' || source === 'yahoo') setFeedSource(source);
-
-    const prevItems = watchlistRef.current;
-    const flashes: Record<string, 'up' | 'down' | 'none'> = {};
-    let anyChange = false;
-
-    const updated = prevItems.map((item) => {
-      const update = rates[item.symbol];
-      if (!update) return item;
-      const price = typeof update.price === 'number' ? update.price : parseFloat(update.price);
-      if (!Number.isFinite(price) || price <= 0) return item; // never mark a symbol with a bogus 0
-      const priceDiff = price - item.price;
-      if (item.price === 0) flashes[item.symbol] = 'none';
-      else flashes[item.symbol] = priceDiff > 0 ? 'up' : priceDiff < 0 ? 'down' : 'none';
-      if (price !== item.price || update.high !== item.high || update.low !== item.low || update.change !== item.change) {
-        anyChange = true;
-      }
-      return {
-        ...item,
-        price,
-        high: Number.isFinite(update.high) ? update.high : item.high,
-        low: Number.isFinite(update.low) ? update.low : item.low,
-        change: Number.isFinite(update.change) ? update.change : item.change,
-      };
-    });
-
-    if (!anyChange) return; // identical payload -> skip the render entirely
-    setWatchlistItems(updated);
-    setTickStates((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const sym of Object.keys(flashes)) {
-        if (flashes[sym] !== 'none') {
-          next[sym] = flashes[sym];
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, []);
-
-  // --- WS + polling state machine ---
-  useEffect(() => {
-    let cancelled = false;
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let reconnectAttempts = 0;
-    let socketOpen = false;
-    let pollFailures = 0;
-    let pollIntervalMs = POLL_BASE_MS;
-    /** Do not poll while the tab is hidden, and do not reconnect a socket nobody can see. */
-    let visible = typeof document === 'undefined' ? true : !document.hidden;
-
-    const backoffPoll = (retryAfterSec?: number) => {
-      pollFailures += 1;
-      const fromServer = Number.isFinite(retryAfterSec) && (retryAfterSec as number) > 0 ? (retryAfterSec as number) * 1000 : 0;
-      pollIntervalMs = Math.min(POLL_MAX_MS, Math.max(POLL_BASE_MS, fromServer || pollIntervalMs * 2));
-      if (pollFailures === 1 || pollFailures % 10 === 0) {
-        console.warn(`[ApexFX] price poll degraded (${pollFailures} consecutive); retrying in ${Math.round(pollIntervalMs / 1000)}s`);
-      }
-      setFeedStatus('degraded');
-    };
-
     const schedulePoll = () => {
-      if (pollTimer) clearTimeout(pollTimer);
-      if (cancelled || !visible) return;
-      pollTimer = setTimeout(poll, pollIntervalMs);
+      clearTimeout(pollTimer);
+      if (cancelled || !visible || socketFresh) return;
+      pollTimer = setTimeout(poll, Math.min(2_147_000_000, Math.max(pollDelay, notBefore - Date.now())));
     };
-
     async function poll() {
-      pollTimer = null;
-      if (cancelled || !visible) return;
+      if (cancelled || !visible || pollInFlight || socketFresh) return;
+      if (Date.now() < notBefore) { schedulePoll(); return; }
+      pollInFlight = true;
       try {
-        const response = await fetch('/api/market/prices');
+        const { response, body } = await request('/api/market/prices');
+        if (cancelled) return;
         if (response.status === 429) {
-          const body = await response.json().catch(() => null);
-          backoffPoll(Number(body?.retryAfterSeconds) || Number(response.headers.get('Retry-After')));
-          schedulePoll();
-          return;
+          // A server minimum is never clamped DOWN by the ordinary exponential-backoff cap.
+          notBefore = Date.now() + Math.max(retryAfterMs(response.headers.get('Retry-After')), Number(body?.retryAfterSeconds) * 1000 || 0, 2500);
         }
-        const data = await response.json();
-        if (response.ok && data?.success && data?.rates) {
-          applyRates(data.rates, data.source);
-          if (pollFailures > 0) {
-            console.info('[ApexFX] price poll recovered');
-            pollFailures = 0;
-            pollIntervalMs = POLL_BASE_MS;
-          }
-          // Polling is the fallback path: only claim 'polling' when the socket is not live.
-          setFeedStatus((prev) => (prev === 'degraded' ? 'polling' : prev === 'connecting' ? 'polling' : prev));
-        } else {
-          backoffPoll();
-        }
+        store.apply(body?.rates);
+        // A demo-labelled response can drive display/polling but never executable freshness.
+        const demoMode = body?.dataMode === 'demo';
+        const fresh = response.ok && body?.success !== false && body?.rates && Object.entries(body.rates).some(([symbol, raw]) => {
+          const parsed = parseQuote(symbol, raw);
+          return !!parsed && (demoMode ? parsed.provider === 'demo' && parsed.price > 0 : isExecutableQuote(parsed));
+        });
+        setTransport(fresh ? 'polling' : 'degraded');
+        pollDelay = fresh ? 2500 : Math.min(15_000, pollDelay * 2);
       } catch {
-        backoffPoll();
-      }
-      schedulePoll();
+        if (!cancelled) { ('degraded'); pollDelay = Math.min(15_000, pollDelay * 2); }
+      } finally { pollInFlight = false; schedulePoll(); }
     }
-
-    const stopPolling = () => {
-      if (pollTimer) {
-        clearTimeout(pollTimer);
-        pollTimer = null;
-      }
+    const reconnect = (minimum = 0) => {
+      if (cancelled || !visible || !wsAllowed || wsDisabled || reconnectTimer) return;
+      reconnectNotBefore = Math.max(reconnectNotBefore, Date.now() + minimum);
+      const delay = Math.max(reconnectNotBefore - Date.now(), Math.min(60_000, 5000 * 2 ** Math.min(attempts++, 4)));
+      reconnectTimer = setTimeout(() => { reconnectTimer = undefined; void connect(); }, Math.min(2_147_000_000, delay));
     };
-
-    const scheduleReconnect = () => {
-      if (reconnectTimer || cancelled || !visible) return;
-      const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.min(reconnectAttempts, 4));
-      reconnectAttempts += 1;
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connect();
-      }, delay);
-    };
-
     async function connect() {
-      if (cancelled) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const baseWsUrl = `${protocol}//${window.location.host}`;
-
-      let wsUrl = baseWsUrl;
+      if (cancelled || !visible || !wsAllowed || wsDisabled || connectInFlight || socket) return;
+      if (Date.now() < reconnectNotBefore) { reconnect(); return; }
+      connectInFlight = true;
       try {
-        const tokenRes = await fetch('/api/ws/token');
-        if (tokenRes.ok) {
-          const { token } = await tokenRes.json();
-          if (token) wsUrl = `${baseWsUrl}?token=${encodeURIComponent(token)}`;
-        } else if (tokenRes.status === 429) {
-          // Token issuance is rate limited: waiting out the advertised window beats the old
-          // behaviour of retrying every 5s and deepening the hole.
-          const retry = Number(tokenRes.headers.get('Retry-After'));
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
-            connect();
-          }, Math.max(5_000, Number.isFinite(retry) && retry > 0 ? retry * 1000 : 15_000));
-          return;
+        const { response, body } = await request('/api/ws/token', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) }, body: '{}',
+        });
+        if (cancelled || !visible) return; // critical post-await lifetime check
+        if (!response.ok || typeof body?.token !== 'string') {
+          if ([401, 403, 404].includes(response.status)) wsDisabled = true;
+          else reconnect(retryAfterMs(response.headers.get('Retry-After')));
+          return; // NEVER attempt a tokenless socket
         }
-        // Any other failure (403 when WS_SHARED_SECRET is set, 5xx): fall through to polling.
-      } catch {
-        /* token endpoint unreachable -> connect will be refused; polling carries the feed */
-      }
-
-      try {
-        ws = new WebSocket(wsUrl);
-      } catch {
-        ws = null;
-        setFeedStatus('polling');
-        schedulePoll();
-        return;
-      }
-
-      ws.onopen = () => {
-        if (cancelled) return;
-        reconnectAttempts = 0;
-        socketOpen = true;
-        setWsConnected(true);
-        setFeedStatus('live');
-        stopPolling(); // socket is authoritative; the poll was only insurance
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'INITIAL_RATES' || data.type === 'PRICE_UPDATE') applyRates(data.rates, data.source);
-        } catch (e) {
-          console.warn('[ApexFX] malformed WebSocket frame ignored:', e);
-        }
-      };
-
-      ws.onclose = () => {
-        if (cancelled) return;
-        socketOpen = false;
-        setWsConnected(false);
-        setFeedStatus('polling');
-        schedulePoll();
-        scheduleReconnect();
-      };
-
-      ws.onerror = () => {
-        try {
-          ws?.close();
-        } catch {
-          /* already closing */
-        }
-      };
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(body.token)}`);
+        socket = ws;
+        lastFrame = Date.now();
+        ws.onopen = () => {
+          if (cancelled) { ws.close(); return; }
+          setWsConnected(true); // transport only; authenticated fresh DATA determines live status
+        };
+        ws.onmessage = event => {
+          if (cancelled) return;
+          try {
+            const message = JSON.parse(event.data);
+            if (!['INITIAL_RATES', 'PRICE_UPDATE'].includes(message.type) || !message.rates) return;
+            store.apply(message.rates);
+            const validFrame = Object.entries(message.rates).some(([symbol, raw]) => {
+              const parsed = parseQuote(symbol, raw);
+              if (!parsed) return false;
+              // The server's own labelled demo frames keep display moving; they never qualify as executable quotes.
+              if (parsed.provider === 'demo') return true;
+              // Executable provider quotes are what prove true liveness.
+              return isExecutableQuote(parsed);
+            });
+            if (validFrame) {
+              lastFrame = Date.now(); attempts = 0; socketFresh = true;
+              setTransport('live'); clearTimeout(pollTimer);
+            } else {
+              socketFresh = false; setTransport('degraded'); schedulePoll();
+            }
+          } catch { /* malformed data is ignored, never promoted to a live quote */ }
+        };
+        ws.onclose = () => {
+          if (socket === ws) socket = null;
+          socketFresh = false;
+          if (cancelled) return;
+          setWsConnected(false); setTransport('polling'); schedulePoll(); reconnect();
+        };
+        ws.onerror = () => ws.close();
+      } catch { if (!cancelled) reconnect(); }
+      finally { connectInFlight = false; }
     }
-
     const onVisibility = () => {
       visible = !document.hidden;
-      if (visible) {
-        // Coming back to the foreground: refresh immediately rather than waiting out a stale
-        // backoff, and re-establish the socket if it was torn down while hidden.
-        pollIntervalMs = POLL_BASE_MS;
-        schedulePoll();
-        if (!socketOpen && !reconnectTimer) connect();
-      } else {
-        stopPolling();
-      }
+      if (visible) { schedulePoll(); void connect(); }
+      else { clearTimeout(pollTimer); clearTimeout(reconnectTimer); reconnectTimer = undefined; }
     };
-
-    if (visible) connect();
+    const watchdog = setInterval(() => {
+      if (socket && Date.now() - lastFrame > 45_000) {
+        socketFresh = false; socket.close(); schedulePoll();
+      }
+    }, 5000);
     document.addEventListener('visibilitychange', onVisibility);
-
+    void poll(); // polling starts independently: a failed handshake must not leave the feed idle
+    void request('/api/capabilities').then(({ response, body }) => {
+      if (cancelled) return;
+      wsAllowed = response.ok && body?.websocket === true;
+      if (wsAllowed) void connect();
+    }).catch(() => { /* keep HTTP fallback */ });
     return () => {
       cancelled = true;
+      requests.forEach(c => c.abort());
+      clearTimeout(pollTimer); clearTimeout(reconnectTimer); clearInterval(watchdog);
       document.removeEventListener('visibilitychange', onVisibility);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      stopPolling();
-      try {
-        ws?.close();
-      } catch {
-        /* ignore */
-      }
-      ws = null;
+      socket?.close();
     };
-    // Deliberately keyed on the stable applyRates callback only: re-running on wsConnected
-    // would tear down the socket every time it flips.
-  }, [applyRates]);
-
-  // Clear tick flashes after 900ms
-  useEffect(() => {
-    const hasActiveFlash = Object.values(tickStates).some((s) => s !== 'none');
-    if (!hasActiveFlash) return;
-    const timer = setTimeout(() => {
-      setTickStates((s) => {
-        const cleared = { ...s };
-        Object.keys(cleared).forEach((k) => {
-          if (cleared[k] !== 'none') cleared[k] = 'none';
-        });
-        return cleared;
-      });
-    }, 900);
-    return () => clearTimeout(timer);
-  }, [tickStates]);
-
-  return {
-    watchlistItems,
-    setWatchlistItems,
-    tickStates,
-    setTickStates,
-    wsConnected,
-    feedStatus,
-    feedSource,
-    watchlistRef,
-  };
+  }, [store, accessToken]);
+  const feedSource = useMemo(() => sourceOf(watchlistItems), [watchlistItems]);
+  // Demo quotes may hold the DISPLAY status up (with the same age window) but never execution;
+  // isExecutableQuote below stays the only trading gate.
+  const hasFreshQuote = watchlistItems.some(q => isExecutableQuote(q, now) ||
+    (q.provider === 'demo' && q.price > 0 && typeof q.asOf === 'number' && now - q.asOf <= QUOTE_MAX_AGE_MS));
+  const feedStatus: FeedStatus = hasFreshQuote ? transport : transport === 'connecting' ? 'connecting' : 'degraded';
+  return { watchlistItems, tickStates, wsConnected, feedStatus, feedSource };
 }
