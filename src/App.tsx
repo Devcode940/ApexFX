@@ -17,6 +17,7 @@ const PositionsPanel = React.lazy(() => import('./components/PositionsPanel').th
 const PerformanceDashboard = React.lazy(() => import('./components/PerformanceDashboard').then((m) => ({ default: m.PerformanceDashboard })));
 import { PatternPanel } from './components/PatternPanel';
 import { WeeklyCalendar } from './components/WeeklyCalendar';
+import BacktestPanel from './components/BacktestPanel';
 import { AiAssistant } from './components/AiAssistant';
 import { SupabaseSync } from './components/SupabaseSync';
 import { formatPrice } from './utils/forexData';
@@ -388,6 +389,7 @@ function TradingTerminal() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-1 gap-4">
               <PatternPanel />
               <WeeklyCalendar />
+              <BacktestPanel />
             </div>
 
             {/* AI Assistant Chat pane */}
@@ -457,6 +459,7 @@ function TradingTerminal() {
             <div className="space-y-4">
               <AiAssistant />
               <PatternPanel />
+              <BacktestPanel />
             </div>
           )}
         </div>
