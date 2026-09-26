@@ -11,6 +11,9 @@ interface WatchlistProps {
 export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => {
   const {
     watchlistItems: items,
+    watchlistSymbols,
+    addWatchlistSymbol,
+    removeWatchlistSymbol,
     selectedSymbol,
     setSelectedSymbol,
     tickStates,
@@ -21,6 +24,10 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
     feedStatus,
     feedSource,
   } = useTrading();
+  // Visible rows follow the user's saved order; the background feed still quotes the whole catalog.
+  const bySymbol = new Map(items.map(item => [item.symbol, item]));
+  const visibleItems = watchlistSymbols.map(symbol => bySymbol.get(symbol)).filter((item): item is NonNullable<typeof item> => !!item);
+  const candidates = items.filter(item => !watchlistSymbols.includes(item.symbol));
 
   const onSelectSymbol = (sym: string) => {
     startTransition(() => {
@@ -52,6 +59,20 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
           <h2 className="font-display font-semibold text-sm tracking-wide uppercase text-zinc-200">
             Market watchlist
           </h2>
+          {candidates.length > 0 && (
+            <details className="relative">
+              <summary className="list-none cursor-pointer text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-emerald-400 select-none" title="Add instruments from the covered catalog">+ add</summary>
+              <div className="absolute z-30 mt-1 right-0 w-40 max-h-64 overflow-y-auto rounded border border-zinc-700 bg-zinc-900 shadow-xl">
+                {candidates.map(item => (
+                  <button
+                    key={item.symbol}
+                    onClick={() => addWatchlistSymbol(item.symbol)}
+                    className="block w-full text-left px-2 py-1.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
+                  >{item.symbol.slice(0, 3)}/{item.symbol.slice(3)} <span className="text-zinc-600">{item.name}</span></button>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
         <span className="text-[10px] bg-zinc-800 text-zinc-400 font-mono px-1.5 py-0.5 rounded font-semibold animate-pulse uppercase">
           {feedStatus}
@@ -60,7 +81,7 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
 
       {/* Grid List */}
       <div className="divide-y divide-zinc-800/60 overflow-y-auto flex-1 text-xs">
-        {items.map((item) => {
+        {visibleItems.map((item) => {
           const quality = quoteQuality(item);
           const isSelected = item.symbol === selectedSymbol;
           const isPositive = item.change >= 0;
@@ -71,13 +92,13 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
           if (tick === 'down') flashClass = 'tick-red-flash';
 
           return (
+            <div key={item.symbol} className={`relative group ${isSelected ? 'bg-zinc-900/90' : ''}`}>
             <button
-              key={item.symbol}
               aria-pressed={isSelected}
               title={`${item.provider ?? 'unknown provider'} · ${item.instrumentKind ?? 'unknown instrument'} · ${quality} · ${item.asOf ? new Date(item.asOf).toISOString() : 'No observation time'}`}
               onClick={() => onSelectSymbol(item.symbol)}
               className={`w-full text-left px-4 py-3 flex items-center justify-between transition-colors outline-none cursor-pointer hover:bg-zinc-900 ${
-                isSelected ? 'bg-zinc-900/90 border-l-2 border-emerald-500' : ''
+                isSelected ? 'border-l-2 border-emerald-500' : ''
               } ${flashClass}`}
               id={`watchlist_btn_${item.symbol}`}
             >
@@ -109,6 +130,15 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
                 </div>
               </div>
             </button>
+            {watchlistSymbols.length > 1 && (
+              <button
+                onClick={() => removeWatchlistSymbol(item.symbol)}
+                className="absolute top-1 right-1 hidden group-hover:flex items-center justify-center w-4 h-4 rounded bg-zinc-800 text-zinc-400 hover:text-red-400 text-[10px]"
+                title={`Remove ${item.symbol} from watchlist`}
+                aria-label={`Remove ${item.symbol} from watchlist`}
+              >×</button>
+            )}
+            </div>
           );
         })}
       </div>

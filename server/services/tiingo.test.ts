@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchTiingoQuotes, fetchTiingoHistory, parseTiingoQuote, parseTiingoHistory, getTiingoPollMs, getTiingoHistoryCacheMs, tiingoStatus, tiingoRetryDelay } from './tiingo';
 import { priceCache, historyCache } from '../lib/cache';
-import { isExecutableQuote, quoteQuality } from '../../shared/market';
+import { isExecutableQuote, quoteQuality, INSTRUMENTS } from '../../shared/market';
 import { redact } from '../lib/logger';
 
 const NOW = Date.parse('2026-09-23T12:00:00Z');
@@ -43,11 +43,11 @@ describe('Tiingo timestamped midpoint normalization', () => {
 });
 
 describe('server-only Tiingo REST/cache/budget boundary', () => {
-  it('batches eight symbols into one request, coalesces concurrent misses and keeps the key out of URLs/results/logs', async () => {
+  it('batches the entire catalog into one request, coalesces concurrent misses and keeps the key out of URLs/results/logs', async () => {
     const results = await Promise.all(Array.from({ length: 5 }, () => fetchTiingoQuotes()));
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0]; const parsed = new URL(url);
-    expect(parsed.pathname).toBe('/tiingo/fx/top'); expect(parsed.searchParams.get('tickers')!.split(',')).toHaveLength(8);
+    expect(parsed.pathname).toBe('/tiingo/fx/top'); expect(parsed.searchParams.get('tickers')!.split(',')).toHaveLength(Object.keys(INSTRUMENTS).length);
     expect(new Headers(init.headers).get('Authorization')).toBe(`Token ${process.env.TIINGO_API_KEY}`);
     expect(url).not.toContain(process.env.TIINGO_API_KEY); expect(JSON.stringify(results)).not.toContain(process.env.TIINGO_API_KEY);
     expect(redact(JSON.stringify(Object.fromEntries(new Headers(init.headers).entries())))).not.toContain(process.env.TIINGO_API_KEY);

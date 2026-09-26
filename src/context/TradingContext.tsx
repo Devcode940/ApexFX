@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useTransition } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   WatchlistItem,
   Timeframe,
@@ -22,7 +22,7 @@ import { useChartHistory } from '../hooks/useChartHistory';
 import { usePaperTrading, type UsePaperTradingApi } from '../hooks/usePaperTrading';
 import { useAccountSession } from '../hooks/useAccountSession';
 import { QuoteStore } from '../utils/quoteStore';
-import { quoteQuality, isExecutableQuote, type FeedSource } from '../../shared/market';
+import { quoteQuality, isExecutableQuote, isSymbol, type FeedSource } from '../../shared/market';
 import { isTimeframe } from '../../shared/timeframes';
 
 interface TradingContextType extends UsePaperTradingApi {
@@ -48,6 +48,10 @@ interface TradingContextType extends UsePaperTradingApi {
   chartData: Record<string, Record<string, Candlestick[]>>;
   setChartData: React.Dispatch<React.SetStateAction<Record<string, Record<string, Candlestick[]>>>>;
   watchlistItems: WatchlistItem[];
+  /** User-chosen subset of the catalog the Watchlist shows, persisted locally. */
+  watchlistSymbols: string[];
+  addWatchlistSymbol: (symbol: string) => void;
+  removeWatchlistSymbol: (symbol: string) => void;
   indicators: TechnicalIndicatorsState;
   handleToggleIndicator: (key: keyof TechnicalIndicatorsState) => void;
   highlightedPattern: Pattern | null;
@@ -147,6 +151,31 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const onClearAttachedImage = React.useCallback(() => setAiSnapshot(null), []);
 
   const { watchlistItems, tickStates, wsConnected, feedStatus, feedSource } = useWatchlistFeed(quoteStore, account.session?.access_token);
+  const WATCHLIST_STORAGE_KEY = 'apexfx.watchlist.symbols.v1';
+  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(WATCHLIST_STORAGE_KEY) || 'null');
+      if (Array.isArray(saved)) {
+        const valid = [...new Set(saved.filter((v): v is string => typeof v === 'string' && isSymbol(v)))];
+        if (valid.length) return valid;
+      }
+    } catch { /* corrupt preference falls back to defaults */ }
+    return ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'GBPJPY', 'XAUUSD', 'XAGUSD'];
+  });
+  useEffect(() => { try { localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(watchlistSymbols)); } catch { /* quota/private mode: session-only selection */ } }, [watchlistSymbols]);
+  const addWatchlistSymbol = useCallback((symbol: string) => {
+    if (!isSymbol(symbol)) return;
+    setWatchlistSymbols(prev => prev.includes(symbol) ? prev : [...prev, symbol]);
+  }, []);
+  const selectedSymbolRef = useRef(selectedSymbol); selectedSymbolRef.current = selectedSymbol;
+  const removeWatchlistSymbol = useCallback((symbol: string) => {
+    setWatchlistSymbols(prev => {
+      if (prev.length <= 1 || !prev.includes(symbol)) return prev;
+      const next = prev.filter(s => s !== symbol);
+      if (symbol === selectedSymbolRef.current) setSelectedSymbol(next[0]!);
+      return next;
+    });
+  }, [setSelectedSymbol]);
 
   const { chartData, setChartData, activeData, historyStatus, historyError, historyMeta, retryHistory } = useChartHistory(selectedSymbol, selectedTimeframe, quoteStore);
 
@@ -239,6 +268,9 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         chartData,
         setChartData,
         watchlistItems,
+        watchlistSymbols,
+        addWatchlistSymbol,
+        removeWatchlistSymbol,
         indicators,
         handleToggleIndicator,
         highlightedPattern,

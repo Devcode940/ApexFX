@@ -8,7 +8,19 @@ export const INSTRUMENTS = {
   GBPJPY: { name: 'GBP / JPY', pipDecimal: 2, spreadPips: 2.3, contractSize: 100000 },
   XAUUSD: { name: 'Gold / USD', pipDecimal: 2, spreadPips: 2.5, contractSize: 100 },
   XAGUSD: { name: 'Silver / USD', pipDecimal: 4, spreadPips: 2, contractSize: 5000 },
+  // Additional majors/crosses. Spread pips are typical indicative values used only by the
+  // paper simulator's cost estimate; actual spreads come from provider bid/ask when present.
+  USDCHF: { name: 'USD / CHF', pipDecimal: 4, spreadPips: 1.6, contractSize: 100000 },
+  EURJPY: { name: 'EUR / JPY', pipDecimal: 2, spreadPips: 1.4, contractSize: 100000 },
+  EURGBP: { name: 'EUR / GBP', pipDecimal: 4, spreadPips: 1.6, contractSize: 100000 },
+  AUDJPY: { name: 'AUD / JPY', pipDecimal: 2, spreadPips: 1.8, contractSize: 100000 },
+  CADJPY: { name: 'CAD / JPY', pipDecimal: 2, spreadPips: 1.8, contractSize: 100000 },
+  NZDUSD: { name: 'NZD / USD', pipDecimal: 4, spreadPips: 1.8, contractSize: 100000 },
+  CHFJPY: { name: 'CHF / JPY', pipDecimal: 2, spreadPips: 1.7, contractSize: 100000 },
+  NZDJPY: { name: 'NZD / JPY', pipDecimal: 2, spreadPips: 2.1, contractSize: 100000 },
 } as const;
+/** The instruments every deployment must serve for /api/ready by default; the rest are optional. */
+export const CORE_SYMBOLS: readonly SymbolCode[] = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'GBPJPY', 'XAUUSD', 'XAGUSD'];
 
 export type SymbolCode = keyof typeof INSTRUMENTS;
 export type MarketProvider = 'tiingo' | 'twelvedata' | 'yahoo' | 'frankfurter';

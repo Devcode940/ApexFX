@@ -14,7 +14,21 @@ const EXTRA_ALLOWED_HOSTS: true | string[] | undefined = (() => {
 
 export default defineConfig(() => {
   return {
-    build: { outDir: 'dist/client' },
+    build: {
+      outDir: 'dist/client',
+      rollupOptions: {
+        // React stays in its own long-lived chunk so app deploys do not invalidate it.
+        // Lazy routes (PerformanceDashboard) keep their own chunks; do not merge them here.
+        output: {
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return undefined;
+            if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'vendor-react';
+            if (id.includes('lightweight-charts')) return 'vendor-charts';
+            return undefined;
+          },
+        },
+      },
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

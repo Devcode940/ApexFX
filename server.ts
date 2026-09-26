@@ -18,7 +18,7 @@ import { fetchMarketHistory } from './server/services/yahoo';
 import { startMarketServices } from './server/services/background';
 import { attachReadOnlySockets, websocketEnabled } from './server/services/socket';
 import { registerChat } from './server/routes/chat';
-import { isExecutableQuote, isSymbol, quoteQuality, QUOTE_MAX_AGE_MS, type MarketQuote } from './shared/market';
+import { CORE_SYMBOLS, isExecutableQuote, isSymbol, quoteQuality, QUOTE_MAX_AGE_MS, type MarketQuote } from './shared/market';
 
 dotenv.config({ quiet: true });
 const app = express();
@@ -61,7 +61,8 @@ const sockets = attachReadOnlySockets(httpServer, app);
 function health() {
   const now = Date.now();
   const fresh = serverWatchlist.filter(q => isExecutableQuote(q, now)).length;
-  const required = (process.env.REQUIRED_MARKET_SYMBOLS || serverWatchlist.map(q => q.symbol).join(',')).split(',').map(s => s.trim());
+  // Expanded optional instruments must not flip an otherwise-healthy core feed to 503.
+  const required = (process.env.REQUIRED_MARKET_SYMBOLS || CORE_SYMBOLS.join(',')).split(',').map(s => s.trim());
   const ready = required.length > 0 && required.every(symbol => isExecutableQuote(serverWatchlist.find(q => q.symbol === symbol), now));
   return { status: ready ? 'ok' : 'degraded', uptime: process.uptime(), timestamp: new Date(now).toISOString(),
     feed: { source: marketSource(), preferredProvider: 'tiingo', tiingo: tiingoStatus(), fresh, priced: serverWatchlist.filter(q => q.price > 0).length, total: serverWatchlist.length,

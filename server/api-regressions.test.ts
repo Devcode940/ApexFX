@@ -23,7 +23,8 @@ let tiingoOk = true;
 let tiingoSymbols = Object.keys(INSTRUMENTS);
 let providerFetch: ReturnType<typeof vi.fn>;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
-const prices: Record<string, number> = { EURUSD: 1.1, GBPUSD: 1.3, USDJPY: 150, AUDUSD: .7, USDCAD: 1.35, GBPJPY: 195, XAUUSD: 2500, XAGUSD: 30 };
+const prices: Record<string, number> = { EURUSD: 1.1, GBPUSD: 1.3, USDJPY: 150, AUDUSD: .7, USDCAD: 1.35, GBPJPY: 195, XAUUSD: 2500, XAGUSD: 30,
+  USDCHF: .8, EURJPY: 165, EURGBP: .84, AUDJPY: 105, CADJPY: 110, NZDUSD: .6, CHFJPY: 205, NZDJPY: 123 };
 beforeAll(async () => {
   const imported = await import('../server'); server = imported.httpServer; stop = imported.stopServer;
   await new Promise<void>(resolve => server.listen(0, '0.0.0.0', resolve));
@@ -97,7 +98,7 @@ describe('real Express API, fixture-only upstreams', () => {
     yahooOk = false; const before = getYahooFailureStreak(); const response = await request('/api/market/prices'); const body = await response.json();
     expect(response.status).toBe(503); expect(body.success).toBe(false); expect(body.source).toBeNull();
     expect(getYahooFailureStreak()).toBe(before + 1);
-    expect(providerFetch.mock.calls.filter(([url]) => String(url).includes('yahoo.com'))).toHaveLength(8);
+    expect(providerFetch.mock.calls.filter(([url]) => String(url).includes('yahoo.com'))).toHaveLength(Object.keys(INSTRUMENTS).length);
   });
   it('returns JSON for malformed/oversized bodies and unknown routes', async () => {
     const malformed = await request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{invalid' });
@@ -176,13 +177,13 @@ describe('Tiingo preferred prices/history and Forex Factory weekly HTTP contract
     expect(body.source).toBe('mixed'); expect(body.rates.EURUSD.provider).toBe('tiingo');
     expect(body.rates.GBPUSD.provider).toBe('yahoo'); expect(body.rates.XAGUSD.instrumentKind).toBe('futures'); expect(isExecutableQuote(body.rates.XAGUSD)).toBe(false);
     const yahoo = providerFetch.mock.calls.filter(([url]) => String(url).includes('yahoo.com'));
-    expect(yahoo).toHaveLength(7); expect(yahoo.every(([url]) => !String(url).includes('EURUSD'))).toBe(true);
+    expect(yahoo).toHaveLength(Object.keys(INSTRUMENTS).length - 1); expect(yahoo.every(([url]) => !String(url).includes('EURUSD'))).toBe(true);
   });
   it('requests the Twelve Data fallback subset, not a second full paid batch over covered Tiingo symbols', async () => {
     configureTiingo(); tiingoSymbols = ['EURUSD']; vi.stubEnv('TWELVEDATA_API_KEY', 'fixture-secondary');
     const body = await (await request('/api/market/prices')).json(); expect(body.rates.EURUSD.provider).toBe('tiingo'); expect(body.rates.GBPUSD.provider).toBe('twelvedata');
     const td = providerFetch.mock.calls.find(([url]) => String(url).includes('twelvedata.com/quote'))!;
-    const symbols = new URL(String(td[0])).searchParams.get('symbol')!.split(','); expect(symbols).toHaveLength(7); expect(symbols).not.toContain('EUR/USD');
+    const symbols = new URL(String(td[0])).searchParams.get('symbol')!.split(','); expect(symbols).toHaveLength(Object.keys(INSTRUMENTS).length - 1); expect(symbols).not.toContain('EUR/USD');
   });
   it('Tiingo-only mode fails unavailable instead of silently returning another provider', async () => {
     configureTiingo(); tiingoOk = false; vi.stubEnv('MARKET_ALLOW_FALLBACKS', 'false');

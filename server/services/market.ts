@@ -8,9 +8,11 @@ import { INSTRUMENTS, EMPTY_QUOTE_METADATA, isExecutableQuote, parseQuote, provi
 
 export const PAIRS_CONFIG_WS = INSTRUMENTS;
 export const TD_SYMBOLS: Record<string, string> = Object.fromEntries(Object.keys(INSTRUMENTS).map(s => [s, `${s.slice(0, 3)}/${s.slice(3)}`]));
+// Spot FX follows Yahoo's <SYMBOL>=X pattern for every catalog instrument; only exceptions
+// are listed explicitly so the map cannot silently drift when the catalog grows.
 export const YAHOO_SYMBOLS: Record<string, string> = {
-  EURUSD: 'EURUSD=X', GBPUSD: 'GBPUSD=X', USDJPY: 'USDJPY=X', AUDUSD: 'AUDUSD=X',
-  USDCAD: 'USDCAD=X', GBPJPY: 'GBPJPY=X', XAUUSD: 'XAUUSD=X', XAGUSD: 'SI=F',
+  ...Object.fromEntries(Object.keys(INSTRUMENTS).map(s => [s, `${s}=X`])),
+  XAGUSD: 'SI=F', // COMEX silver futures; spot has no reliable Yahoo series
 };
 export const yahooTickerFor = (symbol: string): string => YAHOO_SYMBOLS[symbol] || `${symbol}=X`;
 export const yahooKindFor = (symbol: string) => yahooTickerFor(symbol).endsWith('=F') ? 'futures' as const : 'spot' as const;
