@@ -17,7 +17,8 @@
     "build:client": "vite build",
     "test:smoke": "node scripts/production-smoke.mjs",
     "verify": "npm run typecheck && npm run lint && npm test && npm run build && npm run test:smoke",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

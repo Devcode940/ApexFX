@@ -7,13 +7,15 @@ A React/TypeScript market-analysis workstation with a **paper-trading journal**,
 ## Current behavior
 
 - **Honest market data:** Tiingo REST is the preferred quotes/history provider on both Node and request-driven Vercel. Unavailable instruments can fall back to configured Twelve Data, then Yahoo; `MARKET_ALLOW_FALLBACKS=false` makes the app Tiingo-only. Quotes carry provider, provider symbol, instrument kind, observation time, and receipt time. Positive prices without valid provenance/freshness cannot execute orders. No random positive prices or demo trades are generated; automated tests use fixtures.
-- **Tiingo midpoint, not broker fills:** timestamped bid/ask TOP snapshots produce an explicitly labeled midpoint. Missing daily change is shown as unavailable. The browser Node WebSocket may deliver these **polled** snapshots; there is no upstream Tiingo streaming implementation.
+- **Tiingo midpoint, not broker fills:** timestamped bid/ask TOP snapshots produce an explicitly labeled midpoint. Missing daily change is shown as unavailable. The browser Node WebSocket may deliver these **polled** snapshots. An opt-in upstream Tiingo WebSocket (`TIINGO_WS_ENABLED=false` by default) shortens latency when enabled; while it is healthy the REST poller stands down, and any 45-second silence re-enables it automatically.
 - **Spot execution only:** Yahoo's silver `SI=F` is a continuous **futures proxy**, displayed and labeled, not an executable `XAG/USD` spot quote. Frankfurter is daily working-day reference data, never a trading feed. Historical display fallback does not enable the order ticket.
 - **USD journal:** quote-currency P&L is retained alongside nullable USD P&L and conversion provenance. USD-base pairs use their exit/mark rate; JPY crosses need a fresh USD/JPY conversion. Realized conversion is frozen. Unknown legacy conversion/marks are shown as unavailable and excluded from known-USD statistics, not silently counted as dollars or zero.
-- **Ordered simulation:** every accepted quote event reaches the atomic book before React presentation. Touch/rebound events are not discarded by a UI throttle. Stops fill at the adverse observed gap price; targets at the configured target. Closures link to stable position IDs. This does **not** simulate spread, fees, margin, unseen intrapoll paths, or execution while a book is inactive/the app is closed.
+- **Ordered simulation:** every accepted quote event reaches the atomic book before React presentation. Touch/rebound events are not discarded by a UI throttle. Stops fill at the adverse observed gap price; targets at the configured target. Closures link to stable position IDs. Opt-in Execution costs make manual opens/closes pay the traded side of two-sided quotes (bid/ask fills) and charge per-lot commission; even then the simulator does **not** model margin, unseen intrapoll paths, or execution while a book is inactive/the app is closed, and automatic SL/TP exits keep the gap-through-stop limit model.
 - **Weekly data:** `W` candles aggregate available daily OHLC into Monday–Sunday UTC buckets, preserving gaps and marking current/incomplete first weeks. The default fundamentals panel is the Forex Factory **current-week economic calendar**, cached hourly, with currency/impact/upcoming filters and local/UTC time. Missing release values remain “—”; the calendar never supplies prices, trade signals or fills.
 - **Charts:** abortable/retryable history, sparse provisional UTC quote buckets, authoritative reconciliation, retained indicators and marker plugin, and account/symbol-scoped drawings. Quotes only merge into history with the same provider, provider symbol and instrument kind. Cached-history reconciliation retains later observed extrema. Non-UTC provider-session bars stay intact and use history refresh rather than incompatible quote aggregation.
 - **Heuristics, not probabilities:** candle confluence is a causal ranking, not a calibrated win rate. Ledger win rate/profit factor describe simulated observations in the selected scope, not future accuracy. No-loss profit factor is displayed explicitly, not as a made-up `99.9`.
+- **Editable watchlist:** rows are user-chosen from the covered catalog (16 instruments), persisted locally; the background feed quotes the whole catalog so unpriced symbols appear the moment data exists.
+- **Strategy lab (educational):** a deterministic SMA-crossover backtest (`GET /api/backtest`) over the same real cached candles the chart uses, with half-spread and commission costs applied. Quote-currency P&L, explicit disclaimer, never a forecast.
 - **Optional cloud journal:** one versioned JSON book per account with compare-and-swap revisions, closure/deletion tombstones, and an account-bound save RPC. Guest and each account are separate. Legacy data is never automatically assigned/uploaded; original storage and old cloud tables are preserved for explicit review/export.
 - **Optional paid AI:** verified Supabase account by default, or explicitly enabled small guest quotas. Bounded text/image/output, account/global daily budgets, concurrency leases, cancellation and one Gemini SDK attempt. Production paid work fails closed without its shared budget store. The assistant does not have live market/news tools; provide a snapshot or relevant data when asking about a chart.
 
@@ -36,9 +38,13 @@ Set `TIINGO_API_KEY` in the server environment for Tiingo (never in `VITE_*` or 
 
 ```bash
 npm run verify       # typecheck, zero-warning lint, tests, build, offline production smoke
+npm run doctor       # offline operator checklist: env, keys, Vercel cron/CSP, provisioning state
+npm run test:e2e     # Playwright chromium vs the production build in MARKET_DATA_MODE=offline
 npm audit
 NODE_ENV=production npm start
 ```
+
+`test:e2e` needs `npx playwright install chromium` first; CI runs it in the separate `E2E (real browser)` workflow (continue-on-error until its first green main run).
 
 - Static files: `dist/client/`.
 - Private Node bundle/map: `dist/server.cjs` and `.map`, outside the static root.
@@ -76,6 +82,9 @@ The account panel can export a v2/raw backup and validate/restore a v2 backup. W
 | `GET /api/market/news`, `/api/market/forexrate` | Optional legacy bounded/cached proxies (not the default calendar panel) |
 | `POST /api/ws/token` | Short-lived, single-use, IP/origin-bound nonce; optional verified account / header-only service secret |
 | `POST /api/chat` | Authenticated or explicitly capped guest AI request |
+| `GET /api/backtest?symbol&timeframe&fast&slow&lots&commission` | Educational SMA-crossover simulation over cached real history; disclaimed |
+| `GET /api/cron/calendar` | Weekly-calendar prewarm for Vercel Cron; `CRON_SECRET` bearer when configured |
+| `POST /api/client-errors` | First-party browser error beacon: validated, 6/min per IP, redacted log, not persisted |
 
 On persistent Node, upgrade **`/ws?token=...`** with the issued nonce. The shared secret is never accepted in a query string. Origin checks are a browser boundary, not authentication; read-only HTTP quotes remain public.
 

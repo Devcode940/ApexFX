@@ -2,9 +2,25 @@
 
 Implemented 2026-09-23. Scope: **both weekly price candles and the weekly economic calendar**. This extends the earlier [fixes checkpoint](IMPLEMENTATION-2026-09-23.md); account-bound books, USD valuation, quote eligibility and paid-service safeguards remain in place.
 
+## Optional upstream WebSocket (`TIINGO_WS_ENABLED`)
+
+The server can subscribe to Tiingo's FX firehose (`wss://api.tiingo.com/fx`) and update the
+watchlist between REST polls. Design constraints, verified against the public docs but **not**
+against a live authenticated account:
+
+- Off by default; requires `TIINGO_API_KEY` and is inert on Vercel/offline mode.
+- Only frames shaped `{service:"fx", messageType:"A", data:["Q", ticker, ISO timestamp, bidSize, bidPrice, midPrice, askSize, askPrice]}` (or batched arrays of these) become quotes. The midpoint is recomputed from bid/ask — the payload `midPrice` is never trusted. Unknown tickers, crossed books, trade prints and malformed payloads are ignored.
+- Broadcasts are coalesced (≤2/s) so a busy firehose cannot thrash connected clients.
+- While the stream is healthy (a frame <45 s ago) **and** every instrument carries a fresh
+  Tiingo quote, the REST poller stands down; any gap re-enables it. Reconnect uses bounded
+  exponential backoff. `GET /api/health` still reports the REST provider state truthfully.
+- First live procedure: confirm the plan includes websocket access, set `TIINGO_WS_ENABLED=true`,
+  restart the server, and watch for `[TiingoStream]` warnings plus `/api/health` stability for an
+  hour before relying on it.
+
 ## What changed
 
-- **Tiingo REST is the preferred price/history source** on Node and the request-driven Vercel path. Quotes batch the eight catalog tickers. Every result retains its actual provider, provider symbol, instrument kind, observation and receipt times.
+- **Tiingo REST is the preferred price/history source** on Node and the request-driven Vercel path. Quotes batch every catalog symbol in a single request (16 instruments at the time of writing). Every result retains its actual provider, provider symbol, instrument kind, observation and receipt times.
 - **W** is available in all three chart timeframe selectors. Canonical weekly history is aggregated from available **daily OHLC**, Monday 00:00 UTC to the next Monday. No synthetic missing weeks or volume. Current and incomplete first weeks are provisional; a later matching quote can extend/seed an explicitly provisional observed bar. Intraday session shading is disabled for D/W.
 - The default fundamentals panel is now **Weekly Economic Calendar**, using Forex Factory’s current-week JSON export. Currency, high-impact, upcoming/untimed, local/UTC and pagination controls filter one cached dataset. They do not trigger a provider request per symbol/filter.
 - Calendar events are not prices or automatic trading signals. Missing actual/forecast/previous values remain null/“—”. A passed scheduled time does **not** prove a release occurred. Holidays/TBA do not acquire invented scheduled times, and untimed events retain their source date.
@@ -15,7 +31,7 @@ Implemented 2026-09-23. Scope: **both weekly price candles and the weekly econom
 Use Node 24. Keep existing private configuration; create `.env` from `.env.example` only if you do not already have one.
 
 1. Put your **Tiingo FX-enabled token in server-only `TIINGO_API_KEY`**. Never use a `VITE_` variable, paste it into chat, or put it in a client URL. REST authentication uses the `Authorization: Token …` header.
-2. Check your account’s FX/history permissions, metal coverage and redistribution agreement. `xauusd`/`xagusd` are requested but their availability is **not** assumed. This implementation has not made an authenticated Tiingo request.
+2. Check your account’s FX/history permissions, metal coverage, **websocket entitlement** and redistribution agreement. `xauusd`/`xagusd` are requested but their availability is **not** assumed. This implementation has not made an authenticated Tiingo request.
 3. Configure both `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` before enabling paid production work. They also provide the shared calendar snapshot and refresh lease. Vercel always requires shared calendar caching; replicated Node deployments should set `FOREX_FACTORY_REQUIRE_SHARED=true`.
 4. Leave `FOREX_FACTORY_ENABLED=true`. Forex Factory’s public weekly export needs **no source API key**. Keep `MARKET_ALLOW_FALLBACKS=true` for Tiingo → configured Twelve Data → Yahoo, or set it to `false` for Tiingo-only behavior.
 5. Set provider budgets/cadence for the actual plan, restart the server after configuration changes, and verify the actual returned sources—not just HTTP 200. See [deployment](DEPLOYMENT.md) for production runtime, Auth, security and existing cloud migration requirements.
