@@ -50,6 +50,15 @@ describe('default Forex Factory fundamentals panel', () => {
     expect(host.textContent).toContain('Scheduled time passed'); expect(host.textContent).not.toMatch(/Bullish|Bearish|Released/);
     expect(host.querySelector('a')!.href).toBe('https://www.forexfactory.com/calendar');
   });
+  it('counts down to the next high-impact release from the weekly export', async () => {
+    await render();
+    const chip = host.querySelector('[data-testid="next-high-countdown"]')!;
+    expect(chip.textContent).toContain('Next high impact in 1h 0m');
+    expect(chip.textContent).toContain('USD event fixture');
+    // the countdown advances with the 30s tick and disappears once released
+    await act(async () => { vi.advanceTimersByTime(3_600_000 + 1000); });
+    expect(host.querySelector('[data-testid="next-high-countdown"]')).toBeNull();
+  });
   it('filters currencies/impact/upcoming and switches the viewer zone without fetching per filter or symbol', async () => {
     await render();
     await act(async () => checkbox('High impact').click()); expect(host.querySelectorAll('article')).toHaveLength(1);

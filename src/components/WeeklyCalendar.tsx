@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, AlertTriangle, Loader2, ExternalLink, RefreshCw } from 'lucide-react';
+import { CalendarDays, AlertTriangle, Loader2, ExternalLink, RefreshCw, Zap } from 'lucide-react';
 import { useTrading } from '../context/TradingContext';
 import { useWeeklyCalendar } from '../hooks/useWeeklyCalendar';
 import { calendarEventAffects, calendarResponse, calendarSourceDay, CALENDAR_SOURCE_URL, type CalendarImpact, type CalendarEvent } from '../../shared/calendar';
@@ -26,6 +26,15 @@ export const WeeklyCalendar: React.FC = React.memo(() => {
   const events = useMemo(() => (data?.events ?? []).filter(event =>
     (currencies === 'all' || calendarEventAffects(event, selectedSymbol)) && (!highOnly || event.impact === 'HIGH') &&
     (!upcomingOnly || event.scheduledAt === null || event.scheduledAt >= now)), [data, currencies, selectedSymbol, highOnly, upcomingOnly, now]);
+  // Countdown ignores impact/upcoming toggles but follows the currency scope: the next HIGH print
+  // relevant to what the panel is currently scoped to.
+  const nextHigh = useMemo(() => (data?.events ?? [])
+    .filter(event => (currencies === 'all' || calendarEventAffects(event, selectedSymbol)) && event.impact === 'HIGH' && event.scheduledAt !== null && event.scheduledAt > now)
+    .sort((a, b) => (a.scheduledAt ?? 0) - (b.scheduledAt ?? 0))[0] ?? null, [data, now, currencies, selectedSymbol]);
+  const relativeCountdown = (ms: number) => ms < 60_000 ? '<1m'
+    : ms < 3_600_000 ? `${Math.round(ms / 60_000)}m`
+    : ms < 86_400_000 ? `${Math.floor(ms / 3_600_000)}h ${Math.round(ms % 3_600_000 / 60_000)}m`
+    : `${Math.floor(ms / 86_400_000)}d ${Math.floor(ms % 86_400_000 / 3_600_000)}h`;
   useEffect(() => setPage(1), [selectedSymbol, currencies, highOnly, upcomingOnly, data?.fetchedAt]);
   const totalPages = Math.max(1, Math.ceil(events.length / 6));
   const shownPage = Math.min(page, totalPages);
@@ -58,6 +67,12 @@ export const WeeklyCalendar: React.FC = React.memo(() => {
       </div>
       <p className="text-[10px] text-zinc-500">Times: {zone}; untimed events keep the source date. Source week starts Sunday in New York; chart W candles use Monday UTC.</p>
       {current && <p className="text-[10px] text-zinc-500">Retrieved {dateFormat.format(current.fetchedAt)} {timeFormat.format(current.fetchedAt)} · {current.coverageStart && current.coverageEnd ? `${dateFormat.format(current.coverageStart)} – ${dateFormat.format(current.coverageEnd)}` : 'Coverage timestamps unavailable'}</p>}
+      {nextHigh?.scheduledAt !== undefined && nextHigh.scheduledAt !== null && (
+        <p className="flex items-center gap-1.5 text-[10px] text-amber-300/90" data-testid="next-high-countdown">
+          <Zap size={11} className="text-amber-400" />
+          Next high impact in {relativeCountdown(nextHigh.scheduledAt - now)} · {nextHigh.title} ({nextHigh.currency})
+        </p>
+      )}
       <p className="text-[10px] text-zinc-500">Hourly cached export, not a live release feed. Actual/forecast/previous values are shown only when supplied; impact is the provider’s rating.</p>
     </div>
     {(error || current?.warning) && <div role="status" className="mx-4 mt-3 flex gap-2 rounded border border-amber-900 bg-amber-950/20 p-2 text-[11px] text-amber-200"><AlertTriangle size={14} className="shrink-0" /><span>{error ?? current?.warning}</span></div>}

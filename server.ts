@@ -130,6 +130,21 @@ app.get('/api/backtest', async (req, res) => {
   }
 });
 
+/** Cron prewarm (see vercel.json crons): keeps the weekly export hot between visits. */
+app.get('/api/cron/calendar', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) return res.status(401).json({ ok: false, code: 'UNAUTHORIZED' });
+  try {
+    const result = await getWeeklyCalendar();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, source: result.source, fetchedAt: result.fetchedAt, stale: result.stale, events: result.events.length });
+  } catch (error) {
+    const failure = error instanceof CalendarError ? error : new CalendarError('Weekly calendar unavailable.');
+    res.setHeader('Retry-After', String(failure.retryAfterSeconds));
+    res.status(503).json({ ok: false, code: failure.code, error: failure.message });
+  }
+});
+
 app.get('/api/market/calendar', async (req, res) => {
   if (req.query.week !== undefined && req.query.week !== 'this') return res.status(400).json({ error: 'Only the current Forex Factory weekly export is supported.' });
   try {

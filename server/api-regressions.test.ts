@@ -216,6 +216,19 @@ describe('Tiingo preferred prices/history and Forex Factory weekly HTTP contract
     expect((await request('/api/market/calendar?week=next')).status).toBe(400);
     expect((await request('/api/market/calendar?week=../../private')).status).toBe(400);
   });
+  it('guards the calendar cron prewarm with CRON_SECRET and never re-fetches inside the refresh window', async () => {
+    const sourceHits = () => providerFetch.mock.calls.filter(([url]) => String(url).includes('ff_calendar_thisweek')).length;
+    const warm = await request('/api/market/calendar'); expect(warm.status).toBe(200);
+    const afterWarm = sourceHits();
+    expect((await request('/api/cron/calendar')).status).toBe(200); // no secret configured: open but harmless (TTL-guarded)
+    vi.stubEnv('CRON_SECRET', 'cron-fixture-secret');
+    const denied = await request('/api/cron/calendar'); expect(denied.status).toBe(401);
+    const body = await (await request('/api/cron/calendar', { headers: { Authorization: 'Bearer cron-fixture-secret' } })).json();
+    expect(body).toMatchObject({ ok: true, source: 'forexfactory' }); expect(body.events).toBeGreaterThanOrEqual(1);
+    // A warm cache must make zero additional upstream requests, regardless of test ordering.
+    expect(sourceHits()).toBe(afterWarm);
+    expect(String(JSON.stringify(body))).not.toContain('cron-fixture-secret');
+  });
   it('fails the calendar closed without Vercel shared caching and supplies a useful Retry-After', async () => {
     vi.stubEnv('VERCEL', '1');
     const response = await request('/api/market/calendar'); const body = await response.json();
