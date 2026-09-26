@@ -1,6 +1,7 @@
 name: E2E (real browser)
 # Deliberately separate from CI: browser downloads are heavy and occasionally flaky.
-# Flip continue-on-error to false once the job has gone green on main.
+# Blocking since its first green run (5/5 specs) — it already caught a real defect
+# (Strategy lab panel silently missing from App) that the unit suite could not see.
 on:
   pull_request:
   push:
@@ -8,7 +9,6 @@ on:
 
 jobs:
   e2e:
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
