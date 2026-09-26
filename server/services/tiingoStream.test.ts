@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { interpretTiingoMessage, tiingoStreamEnabled, tiingoStreamHealthy, startTiingoStream, __tiingoStreamTestHooks } from './tiingoStream';
 import { serverWatchlist } from './market';
 
-type Fake = { url: string; readyState: number; sent: string[]; open(): void; frame(data: unknown): void; fire(event: string, ...args: unknown[]): void; terminated: boolean; };
 // vi.mock factories are hoisted above module declarations, so the fake lives inside the factory
 // and is shared via globalThis rather than a top-level class reference.
 vi.mock('ws', () => {

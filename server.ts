@@ -6,7 +6,7 @@ import compression from 'compression';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import dotenv from 'dotenv';
-import { log, warn, error as logError } from './server/lib/logger';
+import { error as logError, log, redact, warn } from './server/lib/logger';
 import { fetchJsonWithTimeout } from './server/lib/fetch';
 import { isRateLimited, policyForRequest, retryAfterSeconds } from './server/lib/rateLimit';
 import { securityHeadersMiddleware, sanitizeClientIp, applyTrustProxy } from './server/lib/security';
@@ -131,6 +131,18 @@ app.get('/api/backtest', async (req, res) => {
 });
 
 /** Cron prewarm (see vercel.json crons): keeps the weekly export hot between visits. */
+/** First-party browser error beacons: validated, capped, rate limited, never persisted. */
+app.post('/api/client-errors', (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const kind = body.kind === 'error' || body.kind === 'rejection' ? body.kind : null;
+  const message = typeof body.message === 'string' ? body.message.trim().slice(0, 300) : '';
+  const at = typeof body.at === 'number' && Number.isFinite(body.at) && body.at <= Date.now() + 5_000 && body.at > Date.now() - 86_400_000 ? body.at : Date.now();
+  if (!kind || message.length < 3) return res.status(400).json({ ok: false });
+  const file = typeof body.file === 'string' ? body.file.slice(0, 160) : '';
+  warn(redact(`[client-error] ${kind} at=${new Date(at).toISOString()} ${file ? `file=${file} ` : ''}${message}`).replace(/[\r\n]+/g, ' '));
+  res.status(202).json({ ok: true });
+});
+
 app.get('/api/cron/calendar', async (req, res) => {
   const secret = process.env.CRON_SECRET;
   if (secret && req.headers.authorization !== `Bearer ${secret}`) return res.status(401).json({ ok: false, code: 'UNAUTHORIZED' });

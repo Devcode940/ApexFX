@@ -107,6 +107,23 @@ describe('real Express API, fixture-only upstreams', () => {
     expect(huge.status).toBe(413); expect((await huge.json()).code).toBe('BODY_TOO_LARGE');
     const missing = await request('/api/not-a-route'); expect(missing.status).toBe(404); expect(missing.headers.get('Content-Type')).toContain('application/json');
   });
+  it('caps client error beacons at the contract, rate limits them, and keeps CSP ws same-host only', async () => {
+    const ok = await request('/api/client-errors', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'error', message: 'TypeError: fixture crash', at: Date.now() }) });
+    expect(ok.status).toBe(202); expect(await ok.json()).toEqual({ ok: true });
+    const malformed = await request('/api/client-errors', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'exfiltrate', message: 'x'.repeat(5000), at: Date.now() + 999_999 }) });
+    expect(malformed.status).toBe(400);
+    let limited = 0;
+    for (let i = 0; i < 8; i++) {
+      const r = await request('/api/client-errors', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'rejection', message: `flood probe ${i}`, at: Date.now() }) });
+      if (r.status === 429) limited++;
+    }
+    expect(limited).toBeGreaterThan(0); // the 6/min telemetry policy is real, not decoration
+    vi.stubEnv('NODE_ENV', 'production');
+    const csp = (await request('/api/health')).headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("connect-src 'self' ws://127.0.0.1:");
+    expect(/connect-src[^;]*( ws:| wss:)['"; ]/.test(csp)).toBe(false);
+    vi.stubEnv('NODE_ENV', 'test');
+  });
   it('does not let a forged allowed Origin authenticate paid AI', async () => {
     vi.stubEnv('GEMINI_API_KEY', 'fixture'); const response = await chat({}, { Origin: 'https://terminal.example' });
     expect(response.status).toBe(401); expect(sdk.generate).not.toHaveBeenCalled();

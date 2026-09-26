@@ -87,7 +87,7 @@ const BacktestPanel: React.FC = () => {
   const stats = response?.stats;
 
   return (
-    <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl shadow-lg overflow-hidden flex flex-col">
+    <div data-testid="backtest-panel" className="bg-zinc-950 border border-zinc-800/80 rounded-xl shadow-lg overflow-hidden flex flex-col">
       <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center justify-between">
         <h2 className="font-display font-semibold text-sm tracking-wide uppercase text-zinc-200 flex items-center gap-2">
           <FlaskConical className="w-4 h-4 text-amber-400/80" /> Strategy lab

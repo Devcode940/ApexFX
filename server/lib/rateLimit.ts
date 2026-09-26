@@ -92,6 +92,8 @@ export const RATE_LIMIT_POLICIES: Array<{ match: (path: string) => boolean; max:
   { match: (p) => p.startsWith('/api/market/calendar'), max: 12, windowMs: 60_000, label: 'calendar' },
   { match: (p) => p.startsWith('/api/market/news'), max: 15, windowMs: 60_000, label: 'news' },
   { match: (p) => p.startsWith('/api/ws/token'), max: 20, windowMs: 60_000, label: 'ws-token' },
+  // Telemetry beacons are fire-and-forget; anything busier than this is abuse, not a client.
+  { match: (p) => p.startsWith('/api/client-errors'), max: 6, windowMs: 60_000, label: 'client-errors' },
 ];
 
 /**
