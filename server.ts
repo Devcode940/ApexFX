@@ -15,6 +15,7 @@ import { cachedLoad } from './server/lib/singleFlight';
 import { BudgetError, reserveMarketBudget } from './server/lib/paidBudget';
 import { serverWatchlist, fetchRealLatestPrices, marketSource, marketRates, getYahooFailureStreak } from './server/services/market';
 import { fetchMarketHistory } from './server/services/yahoo';
+import { parseBacktestOptions, runSmaBacktest, BacktestInputError } from './server/services/backtest';
 import { startMarketServices } from './server/services/background';
 import { attachReadOnlySockets, websocketEnabled } from './server/services/socket';
 import { registerChat } from './server/routes/chat';
@@ -107,6 +108,28 @@ app.get('/api/market/history', async (req, res) => {
   try { res.json(await fetchMarketHistory(symbol, timeframe)); }
   catch (error) { logError('[History] Request failed:', error); res.status(502).json({ success: false, error: 'Historical providers unavailable.' }); }
 });
+/** Educational SMA backtest over the same real, cached history the chart uses. */
+app.get('/api/backtest', async (req, res) => {
+  const symbol = typeof req.query.symbol === 'string' ? req.query.symbol.toUpperCase() : '';
+  const timeframe = typeof req.query.timeframe === 'string' ? req.query.timeframe : 'W';
+  if (!isSymbol(symbol)) return res.status(400).json({ ok: false, error: 'Unsupported symbol' });
+  if (!isTimeframe(timeframe)) return res.status(400).json({ ok: false, error: 'Unsupported timeframe' });
+  let options;
+  try { options = parseBacktestOptions(req.query); }
+  catch (error) { return res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Invalid options' }); }
+  if (process.env.MARKET_DATA_MODE === 'offline') return res.status(503).json({ ok: false, error: 'Market data disabled by operator' });
+  try {
+    const history = await fetchMarketHistory(symbol, timeframe);
+    const result = runSmaBacktest(symbol as never, history.data.map(candle => candle.close), options);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, engine: 'sma-cross-v1', symbol, timeframe, provider: history.source, fetchedAt: history.fetchedAt, quoteCurrency: symbol.slice(3), ...result });
+  } catch (error) {
+    if (error instanceof BacktestInputError) return res.status(422).json({ ok: false, error: error.message });
+    logError('[Backtest] History unavailable:', error);
+    res.status(502).json({ ok: false, error: 'Historical providers unavailable for that symbol/timeframe.' });
+  }
+});
+
 app.get('/api/market/calendar', async (req, res) => {
   if (req.query.week !== undefined && req.query.week !== 'this') return res.status(400).json({ error: 'Only the current Forex Factory weekly export is supported.' });
   try {

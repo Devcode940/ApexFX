@@ -1,4 +1,5 @@
 import { tiingoConfigured } from './tiingo';
+import { canSkipTiingoRest, startTiingoStream } from './tiingoStream';
 import { reserveMarketBudget, type BudgetLease } from '../lib/paidBudget';
 import { WebSocket } from 'ws';
 import { applyMarketQuote, fetchRealLatestPrices, fetchYahooPricesFor, getPollMs, getQuoteSyncMs, getYahooFailureStreak, serverWatchlist, TD_SYMBOLS, allowMarketFallbacks } from './market';
@@ -8,6 +9,8 @@ import { warn } from '../lib/logger';
 /** Explicit process lifecycle, never started by importing the Express/Vercel app. */
 export function startMarketServices(broadcast: () => void): () => void {
   if (process.env.VERCEL || process.env.MARKET_DATA_MODE === 'offline') return () => {};
+  // Optional upstream stream; no-op unless TIINGO_WS_ENABLED and a key exist.
+  const stopTiingoStream = startTiingoStream(broadcast);
   let running = true;
   let stream: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -61,7 +64,8 @@ export function startMarketServices(broadcast: () => void): () => void {
       if (hasStreamData && Date.now() - lastRestSync < getQuoteSyncMs()) {
         await fetchYahooPricesFor(serverWatchlist.filter(q => q.provider !== 'twelvedata' || !isExecutableQuote(q)));
       } else {
-        await fetchRealLatestPrices(); lastRestSync = Date.now();
+        if (!canSkipTiingoRest()) await fetchRealLatestPrices();
+        lastRestSync = Date.now();
       }
       if (running) broadcast();
     } catch (error) { warn('[Feed] Refresh failed:', error); }
@@ -76,6 +80,7 @@ export function startMarketServices(broadcast: () => void): () => void {
   void connect(); void tick();
   return () => {
     running = false; clearTimeout(pollTimer); clearTimeout(reconnect); clearInterval(heartbeat);
+    stopTiingoStream();
     stream?.terminate(); stream = null;
   };
 }
