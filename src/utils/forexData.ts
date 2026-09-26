@@ -331,6 +331,36 @@ export function calculateVolatilityDetails(data: Candlestick[], symbol: string):
   };
 }
 
+// Textbook pattern predicates from the MIT `candlestick` library (cm45t3r/candlestick) extend the
+// local scanner below. Library detections are strictly LOWER priority than the bespoke checks
+// (which stay byte-identical) and share the same heuristic context scoring — they never change an
+// existing pattern's confluence, and none of these are probabilities.
+import {
+  isThreeWhiteSoldiers, isThreeBlackCrows, isPiercingLine, isDarkCloudCover,
+  isBullishHarami, isBearishHarami, isBullishKicker, isBearishKicker,
+  isInvertedHammer, isHangingMan, isBullishMarubozu, isBearishMarubozu,
+  isSpinningTop, isTweezersTop, isTweezersBottom,
+} from 'candlestick';
+
+type LibraryPatternSpec = { name: string; type: Pattern['type']; base: number; description: string; detect: (i: number, c: Candlestick, p: Candlestick, pp: Candlestick) => boolean };
+const LIBRARY_PATTERNS: LibraryPatternSpec[] = [
+  { name: 'Three White Soldiers', type: 'bullish', base: 66, detect: (i, c, p, pp) => isThreeWhiteSoldiers(pp, p, c), description: 'Three consecutive strong bullish closes (library detection): sustained buyer control over three candles.' },
+  { name: 'Three Black Crows', type: 'bearish', base: 67, detect: (i, c, p, pp) => isThreeBlackCrows(pp, p, c), description: 'Three consecutive strong bearish closes (library detection): sustained seller control over three candles.' },
+  { name: 'Piercing Line', type: 'bullish', base: 62, detect: (i, c, p) => isPiercingLine(p, c), description: 'Bullish two-candle reversal (library detection): the close pierces more than half of the prior bearish body.' },
+  { name: 'Dark Cloud Cover', type: 'bearish', base: 63, detect: (i, c, p) => isDarkCloudCover(p, c), description: 'Bearish two-candle reversal (library detection): the close pushes below half of the prior bullish body.' },
+  { name: 'Bullish Harami', type: 'bullish', base: 60, detect: (i, c, p) => isBullishHarami(p, c), description: 'Small bullish body contained in the prior bearish body (library detection): weakening downside.' },
+  { name: 'Bearish Harami', type: 'bearish', base: 61, detect: (i, c, p) => isBearishHarami(p, c), description: 'Small bearish body contained in the prior bullish body (library detection): weakening upside.' },
+  { name: 'Bullish Kicker', type: 'bullish', base: 62, detect: (i, c, p) => isBullishKicker(p, c), description: 'Gap-open bullish reversal (library detection): rare in 24h FX, treat as informational.' },
+  { name: 'Bearish Kicker', type: 'bearish', base: 63, detect: (i, c, p) => isBearishKicker(p, c), description: 'Gap-open bearish reversal (library detection): rare in 24h FX, treat as informational.' },
+  { name: 'Tweezers Bottom', type: 'bullish', base: 56, detect: (i, c, p) => isTweezersBottom(p, c), description: 'Matched lows (library detection): a tested-floor signal, not a promise.' },
+  { name: 'Tweezers Top', type: 'bearish', base: 56, detect: (i, c, p) => isTweezersTop(p, c), description: 'Matched highs (library detection): a tested-ceiling signal, not a promise.' },
+  { name: 'Inverted Hammer', type: 'bullish', base: 55, detect: (i, c) => isInvertedHammer(c), description: 'Long upper wick after a decline (library detection): prospective, needs follow-through.' },
+  { name: 'Hanging Man', type: 'bearish', base: 55, detect: (i, c, p) => isHangingMan(p, c), description: 'Hammer shape at highs (library detection): caution signal in an uptrend context.' },
+  { name: 'Bullish Marubozu', type: 'bullish', base: 57, detect: (i, c) => isBullishMarubozu(c), description: 'Near-wickless full-body green candle (library detection): one-sided session.' },
+  { name: 'Bearish Marubozu', type: 'bearish', base: 57, detect: (i, c) => isBearishMarubozu(c), description: 'Near-wickless full-body red candle (library detection): one-sided session.' },
+  { name: 'Spinning Top', type: 'neutral', base: 50, detect: (i, c) => isSpinningTop(c), description: 'Small body with balanced wicks (library detection): indecision.' },
+];
+
 // Causal candlestick pattern scanner with unvalidated confluence ranking
 export function detectPatterns(data: Candlestick[]): Pattern[] {
   const patterns: Pattern[] = [];
@@ -359,6 +389,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
     const upperWick = c.high - Math.max(c.open, c.close);
 
     let pat: Omit<Pattern, 'confluence' | 'reliability' | 'volumeConfirm' | 'score' | 'indicatorsConfirm'> | null = null;
+    let libraryBase: number | undefined;
 
     // Stable ID using candle time + pattern name so markers don't shift on re-render
     const idBase = `${c.time}_`;
@@ -435,6 +466,15 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
         candlestickIndex: i };
     }
 
+    if (!pat && i > 2) {
+      for (const spec of LIBRARY_PATTERNS) {
+        if (!spec.detect(i, c, p, pp)) continue;
+        pat = { id: `${idBase}${spec.name.toLowerCase().replace(/\s+/g, '_')}`, name: spec.name, type: spec.type, time: c.time, description: spec.description, candlestickIndex: i };
+        libraryBase = spec.base;
+        break;
+      }
+    }
+
     if (pat) {
       // Calculate context-driven profitability metrics
       let baseConfluence = 50;
@@ -447,7 +487,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
       const bbLower = bb.lower[i];
 
       if (pat.type === 'bullish') {
-        baseConfluence = pat.name === 'Morning Star' ? 71 : pat.name === 'Bullish Engulfing' ? 68 : 64;
+        baseConfluence = libraryBase ?? (pat.name === 'Morning Star' ? 71 : pat.name === 'Bullish Engulfing' ? 68 : 64);
 
         if (currentRsi !== null && currentRsi !== undefined) {
           if (currentRsi < 35) {
@@ -477,7 +517,7 @@ export function detectPatterns(data: Candlestick[]): Pattern[] {
           indicatorsConfirm.push('High Volume Confirmation');
         }
       } else if (pat.type === 'bearish') {
-        baseConfluence = pat.name === 'Evening Star' ? 72 : pat.name === 'Bearish Engulfing' ? 69 : 65;
+        baseConfluence = libraryBase ?? (pat.name === 'Evening Star' ? 72 : pat.name === 'Bearish Engulfing' ? 69 : 65);
 
         if (currentRsi !== null && currentRsi !== undefined) {
           if (currentRsi > 65) {

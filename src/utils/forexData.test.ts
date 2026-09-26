@@ -140,3 +140,41 @@ describe('generateSignal', () => {
     }
   });
 });
+
+describe('candlestick library extension of detectPatterns', () => {
+  const bar = (open: number, high: number, low: number, close: number, time: number): Candlestick => ({ time, open, high, low, close });
+  // 20 warm-up candles keep the i>2 and indicator paths satisfied identically to production use.
+  const warm = Array.from({ length: 24 }, (_, i) => bar(100 + i * 0.01, 100.2 + i * 0.01, 99.8 + i * 0.01, 100.1 + i * 0.01, 1_700_000_000 + i * 3_600));
+  it('detects Three White Soldiers on a textbook run of three strong bullish closes', () => {
+    const soldiers = [bar(100, 100.9, 99.9, 100.8, 1_700_001_001), bar(100.6, 101.8, 100.5, 101.7, 1_700_001_002), bar(101.5, 102.8, 101.4, 102.7, 1_700_001_003)];
+    const patterns = detectPatterns([...warm, ...soldiers]);
+    expect(patterns.some(pt => pt.name === 'Three White Soldiers' && pt.type === 'bullish')).toBe(true);
+  });
+  it('detects Dark Cloud Cover after a bullish candle on a rising board', () => {
+    const prior = bar(100, 101.5, 99.9, 101.4, 1_700_001_001);
+    const cover = bar(101.6, 101.9, 100.1, 100.6, 1_700_001_002);
+    const patterns = detectPatterns([...warm, prior, cover]);
+    expect(patterns.some(pt => pt.name === 'Dark Cloud Cover' && pt.type === 'bearish')).toBe(true);
+  });
+  it('tags library detections with stable ids and keeps them in the honest confluence band', () => {
+    const soldiers = [bar(100, 100.9, 99.9, 100.8, 1_700_001_001), bar(100.6, 101.8, 100.5, 101.7, 1_700_001_002), bar(101.5, 102.8, 101.4, 102.7, 1_700_001_003)];
+    const found = detectPatterns([...warm, ...soldiers]).filter(pt => pt.name === 'Three White Soldiers');
+    expect(found.length).toBeGreaterThan(0);
+    for (const pt of found) {
+      expect(pt.id).toBe(`${pt.time}_three_white_soldiers`);
+      expect(pt.description).toContain('library detection');
+      expect(pt.confluence).toBeGreaterThanOrEqual(38);
+      expect(pt.confluence).toBeLessThanOrEqual(89);
+      expect(['Low', 'Medium', 'High']).toContain(pt.reliability!);
+    }
+  });
+  it('existing bespoke detections keep priority over library matches on the same candle', () => {
+    // A textbook bullish engulfing of a small red body is ALSO a Piercing-Line-adjacent shape;
+    // the bespoke chain must label it 'Bullish Engulfing', never a library name.
+    const prior = bar(100.5, 100.6, 99.5, 99.6, 1_700_001_001);
+    const engulf = bar(99.4, 100.9, 99.3, 100.8, 1_700_001_002);
+    const names = detectPatterns([...warm, prior, engulf]).map(pt => pt.name);
+    expect(names).toContain('Bullish Engulfing');
+    expect(names).not.toContain('Piercing Line');
+  });
+});

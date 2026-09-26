@@ -7,6 +7,12 @@ git tags and does not publish npm packages.
 ## [Unreleased]
 
 ### Added
+- Pattern scanner extended from 7 bespoke detections to 22 by adopting the MIT
+  [`candlestick`](https://github.com/cm45t3r/candlestick) library (zero-dependency, ~99.7 % coverage)
+  for textbook formations: Three White Soldiers/Black Crows, Piercing Line, Dark Cloud Cover,
+  Harami ×2, Kicker ×2, Tweezers ×2, Inverted Hammer, Hanging Man, Marubozu ×2, Spinning Top.
+  Library matches are strictly lower priority than the bespoke chain and flow through the same
+  honest confluence band — still heuristics, never probabilities.
 - MIT `LICENSE` (Devcode940). Previously the repo shipped no explicit license.
 - Instrument catalog expanded from 8 to 16 FX instruments (adds USDCHF, EURJPY, EURGBP,
   AUDJPY, CADJPY, NZDUSD, CHFJPY, NZDJPY). Tiingo batching, Twelve Data and Yahoo maps
