@@ -15,6 +15,51 @@ async function mount(store: QuoteStore, owner: string | null = 'guest', symbol =
   cleanups.push(hook.unmount); return hook;
 }
 
+describe('spread-aware fills and commission (opt-in execution costs)', () => {
+  it('opens BUY at the ask, closes into the bid, and deducts two commission legs', async () => {
+    localStorage.setItem('apexfx.execution.settings.v1', JSON.stringify({ spreadFills: true, commissionUsdPerLot: 4 }));
+    const store = new QuoteStore(); const hook = await mount(store);
+    const twoSided = (price: number) => quote('EURUSD', price, { bid: price - 0.0002, ask: price + 0.0002 });
+    let id = '';
+    act(() => {
+      store.apply({ EURUSD: twoSided(1.1) });
+      const opened = hook.result.handleOpenPosition('BUY', 1);
+      if (!opened.ok) throw new Error('open rejected'); id = opened.id;
+    });
+    expect(hook.result.positions[0].entryPrice).toBe(1.1002); // paid the ask
+    act(() => { store.apply({ EURUSD: twoSided(1.1) }); hook.result.handleClosePosition(id); });
+    const trade = hook.result.closedTrades[0];
+    expect(trade.exitPrice).toBe(1.0998); // sold into the bid
+    expect(trade.pnlQuote).toBe(-40);     // (bid - ask) * 100k on an unchanged mid
+    expect(trade.pnl).toBe(-48);          // minus $4/lot on each leg
+    expect(trade.commissionUsd).toBe(8);
+  });
+  it('SELL entries receive the bid and closes pay the ask; midpoint mode stays untouched', async () => {
+    localStorage.setItem('apexfx.execution.settings.v1', JSON.stringify({ spreadFills: true, commissionUsdPerLot: 0 }));
+    const store = new QuoteStore(); const hook = await mount(store);
+    let id = '';
+    act(() => {
+      store.apply({ EURUSD: quote('EURUSD', 1.1, { bid: 1.0998, ask: 1.1002 }) });
+      const opened = hook.result.handleOpenPosition('SELL', 1);
+      if (!opened.ok) throw new Error('open rejected'); id = opened.id;
+    });
+    expect(hook.result.positions[0].entryPrice).toBe(1.0998);
+    act(() => { store.apply({ EURUSD: quote('EURUSD', 1.1, { bid: 1.0998, ask: 1.1002 }) }); hook.result.handleClosePosition(id); });
+    expect(hook.result.closedTrades[0].exitPrice).toBe(1.1002);
+    expect(hook.result.closedTrades[0].pnl).toBe(-40);
+    expect(hook.result.closedTrades[0].commissionUsd).toBeUndefined();
+    // single-sided quote (no bid/ask) must fall back to midpoint even with the setting on
+    localStorage.setItem('apexfx.execution.settings.v1', JSON.stringify({ spreadFills: true, commissionUsdPerLot: 2 }));
+    let fallback: ReturnType<typeof hook.result.handleOpenPosition> | undefined;
+    act(() => {
+      store.apply({ EURUSD: quote('EURUSD', 1.12) });
+      fallback = hook.result.handleOpenPosition('BUY', 1);
+    });
+    expect(fallback!.ok).toBe(true);
+    expect(hook.result.positions[0].entryPrice).toBe(1.12);
+  });
+});
+
 describe('real React paper book / ordered quote integration', () => {
   it('executes a stop touch/rebound between renders exactly once, including StrictMode', async () => {
     const store = new QuoteStore(); const hook = await mount(store);

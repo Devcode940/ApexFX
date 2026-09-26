@@ -1,7 +1,7 @@
 import type { TradePosition, ClosedTrade } from '../types';
 import { getContractSize } from './forexData';
 import { isExecutableQuote, type MarketQuote } from '../../shared/market';
-import { valuePnl } from './money';
+import { roundMoney, valuePnl } from './money';
 
 export const PRICE_EPSILON = 1e-9;
 export const MAX_LOTS = 100;
@@ -55,14 +55,20 @@ export interface BuildClosedTradeArgs {
   nowMs?: number;
   quotes?: readonly MarketQuote[];
   closeReason?: ClosedTrade['closeReason'];
+  /** Round-trip commission in USD. Deducted from account-currency P&L when that is computable. */
+  commissionUsd?: number;
 }
 /** Stable closure identity: retries of a position transition cannot invent a second closed trade. */
-export function buildClosedTrade({ position, exitPrice, nowMs = Date.now(), quotes = [], closeReason = 'Manual' }: BuildClosedTradeArgs): ClosedTrade {
+export function buildClosedTrade({ position, exitPrice, nowMs = Date.now(), quotes = [], closeReason = 'Manual', commissionUsd = 0 }: BuildClosedTradeArgs): ClosedTrade {
+  const money = valuePnl(position.symbol, position.type, position.entryPrice, exitPrice, position.amount, quotes, nowMs);
+  const commission = Number.isFinite(commissionUsd) && commissionUsd > 0 ? roundMoney(commissionUsd) : 0;
   return {
     id: `closed_${position.id}`, positionId: position.id,
     symbol: position.symbol, type: position.type, entryPrice: position.entryPrice, exitPrice,
     amount: position.amount, instrumentKind: position.instrumentKind,
-    ...valuePnl(position.symbol, position.type, position.entryPrice, exitPrice, position.amount, quotes, nowMs),
+    pnlQuote: money.pnlQuote, pnlVersion: money.pnlVersion, accountCurrency: money.accountCurrency, quoteCurrency: money.quoteCurrency,
+    pnl: money.pnl === null ? null : roundMoney(money.pnl - commission), conversion: money.conversion,
+    commissionUsd: commission || undefined,
     time: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     closeReason, openedAt: position.openedAt, closedAt: nowMs,
     durationMs: position.openedAt !== undefined ? Math.max(0, nowMs - position.openedAt) : undefined,

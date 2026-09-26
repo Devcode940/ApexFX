@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TradePosition, ClosedTrade } from '../types';
 import { buildClosedTrade, markToMarket, validateOrder, makeId, type OrderRejectionReason } from '../utils/paperTrading';
+import { loadExecutionSettings } from '../utils/executionSettings';
 import { isExecutableQuote } from '../../shared/market';
 import { valuePnl } from '../utils/money';
 import { bookStorageKey, clearLedgerHistory, durableLedger, emptyLedger, mergeLedgers, normalizeClosedTrade, normalizePosition, parseLedger, type Ledger, MAX_LEDGER_ROWS } from '../utils/ledger';
@@ -96,10 +97,15 @@ export function usePaperTrading(store: QuoteStore, selectedSymbol: string, owner
     const now = Date.now();
     const quote = store.get(selectedSymbol);
     if (!isExecutableQuote(quote, now)) return { ok: false, reason: quote ? 'STALE_PRICE' : 'NO_PRICE' };
-    const valid = validateOrder({ type, price: quote.price, amount, sl, tp });
+    const settings = loadExecutionSettings();
+    // Opt-in realistic fills: pay the ask going long, receive the bid going short.
+    // Without a two-sided quote we must not pretend to know the spread: mid is used.
+    const spreadExecutable = settings.spreadFills && quote.bid !== undefined && quote.ask !== undefined && quote.bid > 0 && quote.ask >= quote.bid;
+    const fillPrice = spreadExecutable ? (type === 'BUY' ? quote.ask! : quote.bid!) : quote.price;
+    const valid = validateOrder({ type, price: fillPrice, amount, sl, tp });
     if (!valid.ok) return valid;
     const position: TradePosition = {
-      id: makeId('pos'), symbol: selectedSymbol, type, entryPrice: quote.price, currentPrice: quote.price, markAsOf: quote.asOf,
+      id: makeId('pos'), symbol: selectedSymbol, type, entryPrice: fillPrice, currentPrice: quote.price, markAsOf: quote.asOf,
       amount, sl, tp, instrumentKind: quote.instrumentKind, ...valuePnl(selectedSymbol, type, quote.price, quote.price, amount, store.snapshot(), now),
       time: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), openedAt: now,
     };
@@ -114,7 +120,11 @@ export function usePaperTrading(store: QuoteStore, selectedSymbol: string, owner
     const quote = store.get(target.symbol);
     if (!isExecutableQuote(quote)) return { ok: false, reason: 'STALE_PRICE' };
     if (target.instrumentKind && target.instrumentKind !== quote.instrumentKind) return { ok: false, reason: 'INSTRUMENT_CHANGED' };
-    const record = buildClosedTrade({ position: target, exitPrice: quote.price, quotes: store.snapshot() });
+    const settings = loadExecutionSettings();
+    const spreadExecutable = settings.spreadFills && quote.bid !== undefined && quote.ask !== undefined && quote.bid > 0 && quote.ask >= quote.bid;
+    // Closing a BUY sells into the bid; closing a SELL buys at the ask.
+    const exitPrice = spreadExecutable ? (target.type === 'BUY' ? quote.bid! : quote.ask!) : quote.price;
+    const record = buildClosedTrade({ position: target, exitPrice, quotes: store.snapshot(), commissionUsd: 2 * target.amount * settings.commissionUsdPerLot });
     const book = mergeLedgers({ ...s.book, positions: s.book.positions.filter(p => p.id !== id), closedTrades: [record, ...s.book.closedTrades] }, emptyLedger());
     publish({ ...s, book }, true);
     return { ok: true };

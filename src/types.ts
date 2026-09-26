@@ -107,6 +107,8 @@ export interface TradePosition {
 }
 
 export interface ClosedTrade {
+  /** USD round-trip commission actually deducted from account P&L (only when > 0). */
+  commissionUsd?: number;
   id: string;
   /** Stable original position identity; prevents resurrection and duplicate closes. */
   positionId?: string;

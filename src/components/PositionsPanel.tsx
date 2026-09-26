@@ -6,6 +6,7 @@ import { MAX_LOTS, ORDER_REJECTION_TEXT, validateOrder } from '../utils/paperTra
 import { levelToPips, pipValueUsd, priceOf, usdJpyFrom, usdPerQuoteRate } from '../utils/pips';
 
 import { useTrading } from '../context/TradingContext';
+import { loadExecutionSettings, saveExecutionSettings } from '../utils/executionSettings';
 
 import { hasAccountPnl, formatPnl } from '../utils/money';
 import { downloadTradesCsv } from '../utils/csv';
@@ -37,6 +38,14 @@ export const PositionsPanel: React.FC = () => {
   const [customSl, setCustomSl] = useState<string>('');
   const [customTp, setCustomTp] = useState<string>('');
   const [errorText, setErrorText] = useState<string>('');
+  const [executionSettings, setExecutionSettings] = useState(loadExecutionSettings);
+  const updateExecutionSettings = (patch: Partial<typeof executionSettings>) => {
+    setExecutionSettings(prev => {
+      const next = { ...prev, ...patch };
+      saveExecutionSettings(next);
+      return next;
+    });
+  };
   const [pnlHistory, setPnlHistory] = useState<{ time: string; date: string; fullTime: string; pnl: number }[]>([]);
 
   // --- Closed Trades History Pagination ---
@@ -299,6 +308,27 @@ export const PositionsPanel: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Execution cost realism (paper fills); persisted locally */}
+          <details className="text-[10px] text-zinc-400" data-testid="execution-costs">
+            <summary className="cursor-pointer select-none uppercase tracking-wider text-zinc-500 hover:text-zinc-300">Execution costs · {executionSettings.spreadFills ? 'bid/ask fills' : 'midpoint fills'}{executionSettings.commissionUsdPerLot > 0 ? ` · $${executionSettings.commissionUsdPerLot}/lot/leg` : ''}</summary>
+            <div className="mt-1.5 pl-2 border-l border-zinc-800 space-y-1.5">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={executionSettings.spreadFills} onChange={e => updateExecutionSettings({ spreadFills: e.target.checked })} className="w-3 h-3 accent-emerald-500" />
+                Fill at the traded side (BUY at ask, SELL and closes at bid) when the quote is two-sided
+              </label>
+              <label className="flex items-center gap-2">
+                Commission $/lot/leg
+                <input
+                  type="number" min="0" max="100" step="0.5"
+                  value={executionSettings.commissionUsdPerLot}
+                  onChange={e => updateExecutionSettings({ commissionUsdPerLot: Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)) })}
+                  className="w-16 bg-zinc-950 border border-zinc-800 rounded px-1.5 py-0.5 font-mono text-[11px] text-zinc-200"
+                />
+              </label>
+              <p className="text-zinc-600 leading-snug">Spread/commission settings apply to manual open and close. Automatic SL/TP exits fill at observed or limit prices (gap-through-stop model) and record commission only. Midpoint mode is the default; provider bid/ask presence varies with the active feed.</p>
+            </div>
+          </details>
 
           {/* SL / TP toggle selection */}
           <div className="space-y-2">
