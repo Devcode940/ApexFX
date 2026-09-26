@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBacktestOptions, runSmaBacktest, BacktestInputError, sma } from './backtest';
+import { parseBacktestOptions, runSmaBacktest, BacktestInputError, monteCarloTrades, sma } from './backtest';
 import { INSTRUMENTS } from '../../shared/market';
 
 // Flat warm-up guarantees the SMAs start equal, so the up-cross is observable inside the scan window.
@@ -67,5 +67,39 @@ describe('runSmaBacktest', () => {
     expect(() => runSmaBacktest('EURUSD', [1, 2, 3], opts)).toThrow(BacktestInputError);
     expect(() => runSmaBacktest('EURUSD', flat(120).map((v, i) => (i === 10 ? NaN : v)), opts)).toThrow(BacktestInputError);
     expect(() => runSmaBacktest('EURUSD', flat(120).map(() => 0), opts)).toThrow(BacktestInputError);
+  });
+});
+
+describe('monteCarloTrades', () => {
+  const mixed = [300, -120, 210, -90, 150, -200, 260, -40, 180, -110, 220, 90];
+  it('is deterministic per seed and varies across seeds', () => {
+    const base = { historicalMaxDrawdownQuote: 400 };
+    const a = monteCarloTrades(mixed, { ...base, simulations: 120, seed: 7 });
+    const b = monteCarloTrades(mixed, { ...base, simulations: 120, seed: 7 });
+    expect(a.available && b.available && a.maxDrawdownQuote.p95 === b.maxDrawdownQuote.p95).toBe(true);
+    const d = monteCarloTrades(mixed, { ...base, simulations: 120, seed: 99 });
+    expect(JSON.stringify(a) !== JSON.stringify(d)).toBe(true);
+  });
+  it('an all-win trade list cannot produce drawdown in any resample', () => {
+    const res = monteCarloTrades([100, 50, 80, 20, 60, 30], { simulations: 100, seed: 3, historicalMaxDrawdownQuote: 0 });
+    expect(res.available).toBe(true);
+    if (res.available) {
+      expect(res.maxDrawdownQuote.p50).toBe(0);
+      expect(res.maxDrawdownQuote.p95).toBe(0);
+      expect(res.probabilityNegativeResult).toBe(0);
+    }
+  });
+  it('p95 >= p50 and probabilities stay in 0..100', () => {
+    const res = monteCarloTrades(mixed, { simulations: 300, seed: 11, historicalMaxDrawdownQuote: 250 });
+    if (!res.available) throw new Error('expected availability');
+    expect(res.maxDrawdownQuote.p95).toBeGreaterThanOrEqual(res.maxDrawdownQuote.p50);
+    expect(res.finalPnlQuote.p95Loss).toBeLessThanOrEqual(res.finalPnlQuote.p50);
+    for (const pct of [res.probabilityDoublesHistoricalDd, res.probabilityNegativeResult]) {
+      expect(pct).toBeGreaterThanOrEqual(0); expect(pct).toBeLessThanOrEqual(100);
+    }
+  });
+  it('guards tiny and corrupt trade lists', () => {
+    expect(monteCarloTrades([10, -5, 3], { historicalMaxDrawdownQuote: 10 })).toEqual({ available: false, reason: expect.stringContaining('at least 5') });
+    expect(monteCarloTrades([10, -5, 3, NaN, 4, 1], { historicalMaxDrawdownQuote: 10 }).available).toBe(false);
   });
 });

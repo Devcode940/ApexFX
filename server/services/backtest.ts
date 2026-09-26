@@ -9,6 +9,8 @@
  */
 import { INSTRUMENTS, type SymbolCode } from '../../shared/market';
 
+const round2 = (v: number): number => Math.round(v * 100) / 100;
+
 export interface BacktestOptions {
   fast: number;
   slow: number;
@@ -147,5 +149,72 @@ export function runSmaBacktest(symbol: SymbolCode, closes: number[], options: Ba
     equityCurve,
     costsApplied: { halfSpreadQuote, commissionPerLeg },
     disclaimer: 'Educational simulation on historical bars with synthetic spread/commission costs. Not investment advice and not indicative of live fills.',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Monte-Carlo trade-order resampling (Strategy Arena concept, ported).
+// Shuffles the ACTUAL backtest trade sequence with replacement to show how
+// luck-of-ordering could have changed the pain. Deterministic: seeded PRNG,
+// so API responses and tests are reproducible. Descriptive statistics over a
+// historical sample — explicitly not a forecast.
+// ---------------------------------------------------------------------------
+
+export interface MonteCarloResult {
+  available: true;
+  simulations: number;
+  seed: number;
+  tradesPerPath: number;
+  maxDrawdownQuote: { p50: number; p95: number };
+  finalPnlQuote: { p50: number; p95Loss: number };
+  /** Chance a shuffled path draws down at least twice the historical worst. */
+  probabilityDoublesHistoricalDd: number;
+  /** Chance a shuffled path ends below break-even. */
+  probabilityNegativeResult: number;
+  note: string;
+}
+export interface MonteCarloUnavailable { available: false; reason: string }
+
+const mulberry32 = (seed: number) => {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+const percentile = (sortedAsc: number[], q: number): number => sortedAsc[Math.min(sortedAsc.length - 1, Math.max(0, Math.ceil(q * sortedAsc.length) - 1))]!;
+
+export function monteCarloTrades(pnls: number[], options: { simulations?: number; seed?: number; historicalMaxDrawdownQuote: number }): MonteCarloResult | MonteCarloUnavailable {
+  if (!Array.isArray(pnls) || pnls.length < 5) return { available: false, reason: 'Monte-Carlo needs at least 5 trades to resample; this backtest produced fewer.' };
+  if (pnls.some(p => !Number.isFinite(p))) return { available: false, reason: 'Trade series contains a non-finite P&L.' };
+  const simulations = Math.min(2000, Math.max(50, Math.round(options.simulations ?? 500)));
+  const seed = Number.isFinite(options.seed) ? Math.trunc(options.seed!) >>> 0 : 42;
+  const rand = mulberry32(seed);
+  const n = pnls.length;
+  const maxDds: number[] = [];
+  const finals: number[] = [];
+  for (let s = 0; s < simulations; s++) {
+    let equity = 0; let peak = 0; let dd = 0;
+    for (let k = 0; k < n; k++) {
+      equity += pnls[Math.min(n - 1, Math.floor(rand() * n))]!;
+      if (equity > peak) peak = equity;
+      dd = Math.max(dd, peak - equity);
+    }
+    maxDds.push(dd);
+    finals.push(equity);
+  }
+  maxDds.sort((a, b) => a - b);
+  finals.sort((a, b) => a - b);
+  const doubleThreshold = options.historicalMaxDrawdownQuote > 0 ? options.historicalMaxDrawdownQuote * 2 : Infinity;
+  return {
+    available: true,
+    simulations, seed, tradesPerPath: n,
+    maxDrawdownQuote: { p50: round2(percentile(maxDds, 0.5)), p95: round2(percentile(maxDds, 0.95)) },
+    finalPnlQuote: { p50: round2(percentile(finals, 0.5)), p95Loss: round2(percentile(finals, 0.05)) },
+    probabilityDoublesHistoricalDd: doubleThreshold === Infinity ? 0 : Math.round((maxDds.filter(d => d >= doubleThreshold).length / simulations) * 1000) / 10,
+    probabilityNegativeResult: Math.round((finals.filter(f => f < 0).length / simulations) * 1000) / 10,
+    note: 'Order-of-trades resampling with replacement over THIS backtest\u2019s trade list. Same expected value by construction; it quantifies sequencing risk only, not edge. Not a forecast.',
   };
 }

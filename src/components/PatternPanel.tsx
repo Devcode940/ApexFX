@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Sparkles, Eye, RefreshCw, Award, ShieldCheck } from 'lucide-react';
 
 import { useTrading } from '../context/TradingContext';
+import { summarizePatternFollowThrough } from '../utils/patternStats';
 
 interface PatternPanelProps {}
 
@@ -10,7 +11,14 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
     activePatterns: patterns,
     highlightedPattern,
     setHighlightedPattern: onHighlightPattern,
+    activeData,
+    selectedSymbol,
+    selectedTimeframe,
+    historyStatus,
   } = useTrading();
+  const followThrough = historyStatus === 'ready' && patterns.length > 0
+    ? summarizePatternFollowThrough(patterns, activeData, selectedSymbol, 3)
+    : null;
   const [filterType, setFilterType] = useState<'all' | 'confluence'>('all');
   const [sortBy, setSortBy] = useState<'chronological' | 'confluence'>('confluence');
 
@@ -230,6 +238,29 @@ export const PatternPanel: React.FC<PatternPanelProps> = React.memo(() => {
         <div className="text-[9px] leading-snug text-zinc-500/80">
           ⚠️ Confluence scores are unvalidated heuristics, not win probabilities — not financial advice.
         </div>
+        {followThrough && followThrough.perPattern.length > 0 && (
+          <div className="mt-2 rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-3 space-y-1.5" data-testid="pattern-follow-through">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">Follow-through · loaded window</span>
+              <span className="text-[9px] font-mono text-zinc-600">{selectedSymbol} {selectedTimeframe} · {followThrough.timeframeBars} bars · +{followThrough.horizon}</span>
+            </div>
+            <div className="text-[10px] font-mono divide-y divide-zinc-800/60">
+              {followThrough.perPattern.slice(0, 6).map(row => (
+                <div key={row.name} className="flex items-center justify-between py-1">
+                  <span className={`capitalize ${row.direction === 'bullish' ? 'text-emerald-400/90' : row.direction === 'bearish' ? 'text-rose-400/90' : 'text-zinc-400'}`}>{row.name}</span>
+                  <span className="text-zinc-500">{row.occurrences}×{row.occurrences !== row.evaluated ? ` (${row.evaluated} eval.)` : ''}</span>
+                  {row.successRatePct !== null
+                    ? <span className={row.successRatePct >= 50 ? 'text-emerald-300' : 'text-zinc-300'}>{row.successRatePct}% beyond</span>
+                    : <span className="text-zinc-400">±{row.medianAbsMovePips?.toLocaleString()} pips</span>}
+                  {row.medianMovePips !== null && row.successRatePct !== null && (
+                    <span className="text-zinc-400">{row.medianMovePips > 0 ? '+' : ''}{row.medianMovePips.toLocaleString()} pips</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p className="text-[9px] text-zinc-600 leading-snug">{followThrough.note}</p>
+          </div>
+        )}
       </div>
     </div>
   );

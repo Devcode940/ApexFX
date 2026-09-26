@@ -15,7 +15,7 @@ import { cachedLoad } from './server/lib/singleFlight';
 import { BudgetError, reserveMarketBudget } from './server/lib/paidBudget';
 import { serverWatchlist, fetchRealLatestPrices, marketSource, marketRates, getYahooFailureStreak } from './server/services/market';
 import { fetchMarketHistory } from './server/services/yahoo';
-import { parseBacktestOptions, runSmaBacktest, BacktestInputError } from './server/services/backtest';
+import { parseBacktestOptions, runSmaBacktest, monteCarloTrades, BacktestInputError } from './server/services/backtest';
 import { startMarketServices } from './server/services/background';
 import { attachReadOnlySockets, websocketEnabled } from './server/services/socket';
 import { registerChat } from './server/routes/chat';
@@ -121,8 +121,16 @@ app.get('/api/backtest', async (req, res) => {
   try {
     const history = await fetchMarketHistory(symbol, timeframe);
     const result = runSmaBacktest(symbol as never, history.data.map(candle => candle.close), options);
+    const sims = Number(req.query.montecarlo ?? req.query.sims ?? 0);
+    const monteCarlo = Number.isFinite(sims) && sims !== 0
+      ? monteCarloTrades(result.trades.map(t => t.pnl), {
+          simulations: sims,
+          seed: Number.isFinite(Number(req.query.seed)) ? Number(req.query.seed) : undefined,
+          historicalMaxDrawdownQuote: Math.abs(result.stats.maxDrawdownQuote),
+        })
+      : undefined;
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ ok: true, engine: 'sma-cross-v1', symbol, timeframe, provider: history.source, fetchedAt: history.fetchedAt, quoteCurrency: symbol.slice(3), ...result });
+    res.json({ ok: true, engine: 'sma-cross-v1', symbol, timeframe, provider: history.source, fetchedAt: history.fetchedAt, quoteCurrency: symbol.slice(3), ...result, ...(monteCarlo ? { monteCarlo } : {}) });
   } catch (error) {
     if (error instanceof BacktestInputError) return res.status(422).json({ ok: false, error: error.message });
     logError('[Backtest] History unavailable:', error);

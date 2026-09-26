@@ -6,6 +6,7 @@ import { MAX_LOTS, ORDER_REJECTION_TEXT, validateOrder } from '../utils/paperTra
 import { levelToPips, pipValueUsd, priceOf, usdJpyFrom, usdPerQuoteRate } from '../utils/pips';
 
 import { useTrading } from '../context/TradingContext';
+import ChallengePanel from './ChallengePanel';
 import { loadExecutionSettings, saveExecutionSettings } from '../utils/executionSettings';
 
 import { hasAccountPnl, formatPnl } from '../utils/money';
@@ -572,6 +573,7 @@ export const PositionsPanel: React.FC = () => {
 
         {activeTab === 'analytics' ? (
           <div className="space-y-4">
+            <ChallengePanel />
             <PerformanceDashboard />
           </div>
         ) : activeTab === 'positions' ? (

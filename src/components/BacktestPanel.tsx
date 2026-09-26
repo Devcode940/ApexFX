@@ -31,6 +31,12 @@ interface BacktestResponse {
   trades?: BacktestTrade[];
   equityCurve?: { index: number; equity: number }[];
   disclaimer?: string;
+  monteCarlo?: {
+    available: boolean; reason?: string; simulations?: number; tradesPerPath?: number;
+    maxDrawdownQuote?: { p50: number; p95: number };
+    finalPnlQuote?: { p50: number; p95Loss: number };
+    probabilityDoublesHistoricalDd?: number; probabilityNegativeResult?: number; note?: string;
+  };
 }
 
 const Stat = ({ label, value, tone }: { label: string; value: string; tone?: 'pos' | 'neg' }) => (
@@ -72,7 +78,7 @@ const BacktestPanel: React.FC = () => {
   const run = useCallback(async () => {
     setStatus('loading');
     try {
-      const params = new URLSearchParams({ symbol: selectedSymbol, timeframe: selectedTimeframe, fast: String(fast), slow: String(slow), lots: String(lots), commission: String(commission) });
+      const params = new URLSearchParams({ symbol: selectedSymbol, timeframe: selectedTimeframe, fast: String(fast), slow: String(slow), lots: String(lots), commission: String(commission), montecarlo: '500' });
       const res = await fetch(`/api/backtest?${params.toString()}`);
       const body: BacktestResponse = await res.json();
       setResponse(body.ok ? body : { ok: false, error: body.error || `Request failed (${res.status})` });
@@ -143,6 +149,23 @@ const BacktestPanel: React.FC = () => {
                 ))}
               </div>
             )}
+            {response.monteCarlo && (response.monteCarlo.available ? response.monteCarlo.maxDrawdownQuote && (
+              <div className="rounded border border-zinc-800/80 bg-zinc-900/40 p-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] uppercase tracking-wider text-zinc-500">Stress test · {response.monteCarlo.simulations} shuffled paths</span>
+                  <span className="text-[9px] text-zinc-600 font-mono">{response.monteCarlo.tradesPerPath} trades/path</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                  <div className="flex justify-between"><span className="text-zinc-500">Max DD p50/p95</span><span className="text-zinc-200">{response.monteCarlo.maxDrawdownQuote.p50.toLocaleString()} / {response.monteCarlo.maxDrawdownQuote.p95.toLocaleString()} {quoteCcy}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Final p50/worst-5%</span><span className="text-zinc-200">{(response.monteCarlo.finalPnlQuote?.p50 ?? 0).toLocaleString()} / {(response.monteCarlo.finalPnlQuote?.p95Loss ?? 0).toLocaleString()} {quoteCcy}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">P(2× historical DD)</span><span className={response.monteCarlo.probabilityDoublesHistoricalDd! > 25 ? 'text-red-400' : 'text-zinc-200'}>{response.monteCarlo.probabilityDoublesHistoricalDd}%</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">P(negative run)</span><span className={response.monteCarlo.probabilityNegativeResult! > 40 ? 'text-red-400' : 'text-zinc-200'}>{response.monteCarlo.probabilityNegativeResult}%</span></div>
+                </div>
+                <p className="text-[9px] text-zinc-600 leading-snug">{response.monteCarlo.note}</p>
+              </div>
+            ) : (
+              <p className="text-[10px] text-zinc-500">Stress test unavailable: {response.monteCarlo.reason}</p>
+            ))}
             <p className="text-[9px] text-zinc-600 leading-snug">{response.disclaimer} P&amp;L is denominated in the quote currency ({quoteCcy}). Data source: {response.provider}.</p>
           </div>
         )}
