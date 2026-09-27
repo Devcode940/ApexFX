@@ -1,3 +1,4 @@
+import { TIMEFRAMES, TIME_CONFIG } from '../../../shared/timeframes';
 import React from 'react';
 import { AlertCircle, Camera, Maximize2, Minimize2, SlidersHorizontal } from 'lucide-react';
 import type { Candlestick, Timeframe } from '../../types';
@@ -82,9 +83,11 @@ export const ChartHeader: React.FC<ChartHeaderProps> = ({
 
         {/* Quick Timeframe Bar */}
         <div className="hidden lg:flex items-center gap-1 bg-zinc-950/60 p-1 rounded border border-zinc-800/60 text-[10px] font-mono font-bold">
-          {(['1m', '5m', '15m', '1H', '4H', 'D'] as Timeframe[]).map((tf) => (
+          {TIMEFRAMES.map((tf) => (
             <button
               key={tf}
+              title={TIME_CONFIG[tf].label}
+              aria-pressed={timeframe === tf}
               type="button"
               onClick={() => onSelectTimeframe(tf)}
               className={`px-2 py-0.5 rounded transition-all cursor-pointer ${

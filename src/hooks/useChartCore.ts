@@ -1,41 +1,11 @@
 import React, { useEffect, useRef } from 'react';
-import {
-  IChartApi,
-  ISeriesApi,
-  IPriceLine,
-  createSeriesMarkers,
-  MouseEventParams,
-  UTCTimestamp,
-  BarData,
-  LineData,
-  CandlestickSeries,
-} from 'lightweight-charts';
+import { type IChartApi, type ISeriesApi, type IPriceLine, type ISeriesMarkersPluginApi, type Time, createSeriesMarkers, type MouseEventParams, type UTCTimestamp, type BarData, type LineData, CandlestickSeries } from 'lightweight-charts';
 import type { Candlestick, Pattern, TechnicalIndicatorsState, Timeframe } from '../types';
 import type { SessionBlock } from '../utils/forexSessions';
-import type {
-  AnimatedTrade,
-  ChartPoint,
-  ChartTheme,
-  DrawingsState,
-  DrawingTool,
-  HudData,
-} from '../types/chart';
-import {
-  buildChartMarkers,
-  createBollingerSeries,
-  createEmaSeries,
-  createFibonacciPriceLines,
-  createMacdSubChart,
-  createMainChart,
-  createRsiSubChart,
-  createSmaSeries,
-  formatChartTime,
-  syncTimeScales,
-  toCandlestickData,
-  toEpochSeconds,
-} from '../utils/chart/indicatorOverlays';
+import type { AnimatedTrade, ChartPoint, ChartTheme, DrawingsState, DrawingTool, HudData } from '../types/chart';
+import { buildChartMarkers, createBollingerSeries, createEmaSeries, createFibonacciPriceLines, createMacdSubChart, createMainChart, createRsiSubChart, createSmaSeries, formatChartTime, syncTimeScales, toCandlestickData, toEpochSeconds, toLineValues } from '../utils/chart/indicatorOverlays';
 import { createHorizontalPriceLines, createTrendlineSeries, newRiskRewardTool } from '../utils/chart/drawingTools';
-import { computeRSI, PAIRS_CONFIG } from '../utils/forexData';
+import { computeRSI, computeSMA, computeEMA, computeBollingerBands, computeMACD, PAIRS_CONFIG } from '../utils/forexData';
 
 export interface UseChartCoreParams {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -73,282 +43,99 @@ export interface UseChartCoreParams {
   showPatternBeams: boolean;
 }
 
-type ChartRefs = {
-  candleSeries: ISeriesApi<'Candlestick'> | null;
-  smaSeries: ISeriesApi<'Line'> | null;
-  emaSeries: ISeriesApi<'Line'> | null;
-  bbSeries: ReturnType<typeof createBollingerSeries>;
-  fibLines: IPriceLine[];
-  priceLines: IPriceLine[];
-  trendlineSeries: ISeriesApi<'Line'>[];
-  unsubscribeSync: (() => void) | null;
-  resizeObserver: ResizeObserver | null;
+type Handles = {
+  candle: ISeriesApi<'Candlestick'> | null;
+  sma: ISeriesApi<'Line'> | null; ema: ISeriesApi<'Line'> | null;
+  bb: ReturnType<typeof createBollingerSeries>;
+  rsi: ReturnType<typeof createRsiSubChart>; macd: ReturnType<typeof createMacdSubChart>;
+  markers: ISeriesMarkersPluginApi<Time> | null;
+  fib: IPriceLine[]; priceLines: IPriceLine[]; trendlines: ISeriesApi<'Line'>[];
+  rsiValues: (number | null)[];
+  syncCleanup: (() => void) | null; data: Candlestick[]; fitted: boolean; redraw: (() => void) | null;
 };
 
 export function useChartCore(params: UseChartCoreParams): void {
-  const {
-    containerRef,
-    rsiContainerRef,
-    macdContainerRef,
-    chartRef,
-    rsiChartRef,
-    macdChartRef,
-    symbol,
-    timeframe,
-    data,
-    indicators,
-    theme,
-    chartHeight,
-    isExpandedFullScreen,
-    isRsiMinimized,
-    isMacdMinimized,
-    drawings,
-    setDrawings,
-    activeTool,
-    setActiveTool,
-    trendlineStart,
-    setTrendlineStart,
-    fibStart,
-    setFibStart,
-    selectedColor,
-    setHudData,
-    patterns,
-    visibleChartPatterns,
-    highlightedPattern,
-    sessionBlocks,
-    showSessionShading,
-    symbolTradesToAnimate,
-    showTradeAnimations,
-    showPatternBeams,
-  } = params;
+  const { containerRef, chartRef, symbol, timeframe, theme, data, indicators, drawings, chartHeight,
+    isExpandedFullScreen, isRsiMinimized, isMacdMinimized, rsiContainerRef, macdContainerRef,
+    rsiChartRef, macdChartRef, visibleChartPatterns, highlightedPattern, trendlineStart, selectedColor } = params;
+  const latest = useRef(params);
+  useEffect(() => { latest.current = params; }, [params]);
+  const refs = useRef<Handles>({ candle: null, sma: null, ema: null, bb: null, rsi: null, macd: null, markers: null,
+    fib: [], priceLines: [], trendlines: [], rsiValues: [], syncCleanup: null, data: [], fitted: false, redraw: null });
 
-  // Refs for stable callbacks
-  const activeToolRef = useRef<DrawingTool>(activeTool);
-  useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
-
-  const trendlineStartRef = useRef<ChartPoint | null>(trendlineStart);
-  useEffect(() => { trendlineStartRef.current = trendlineStart; }, [trendlineStart]);
-
-  const fibStartRef = useRef<ChartPoint | null>(fibStart);
-  useEffect(() => { fibStartRef.current = fibStart; }, [fibStart]);
-
-  const selectedColorRef = useRef<string>(selectedColor);
-  useEffect(() => { selectedColorRef.current = selectedColor; }, [selectedColor]);
-
-  const drawingsRef = useRef<DrawingsState>(drawings);
-  useEffect(() => { drawingsRef.current = drawings; }, [drawings]);
-
-  const sessionBlocksRef = useRef<SessionBlock[]>(sessionBlocks);
-  useEffect(() => { sessionBlocksRef.current = sessionBlocks; }, [sessionBlocks]);
-
-  const showSessionShadingRef = useRef(showSessionShading);
-  useEffect(() => { showSessionShadingRef.current = showSessionShading; }, [showSessionShading]);
-
-  const tradesRef = useRef<AnimatedTrade[]>(symbolTradesToAnimate);
-  useEffect(() => { tradesRef.current = symbolTradesToAnimate; }, [symbolTradesToAnimate]);
-
-  const showTradeAnimationsRef = useRef(showTradeAnimations);
-  useEffect(() => { showTradeAnimationsRef.current = showTradeAnimations; }, [showTradeAnimations]);
-
-  const showPatternBeamsRef = useRef(showPatternBeams);
-  useEffect(() => { showPatternBeamsRef.current = showPatternBeams; }, [showPatternBeams]);
-
-  const patternsRef = useRef<Pattern[]>(patterns);
-  useEffect(() => { patternsRef.current = patterns; }, [patterns]);
-
-  const chartRefs = useRef<ChartRefs>({
-    candleSeries: null,
-    smaSeries: null,
-    emaSeries: null,
-    bbSeries: null,
-    fibLines: [],
-    priceLines: [],
-    trendlineSeries: [],
-    unsubscribeSync: null,
-    resizeObserver: null,
-  });
-
-  // Main chart lifecycle — only recreate on symbol/timeframe/theme/height/indicators/minimized changes, NOT on drawings
+  // Chart identity only. An appended bar, indicator toggle, drawing, or resize is NOT a new chart.
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || data.length === 0) return;
-
-    // Capture the ref object for the cleanup closure. Reading chartRefs.current at cleanup time
-    // can observe a *different* object if another effect re-assigned it (react-hooks/exhaustive-deps
-    // warning) — leaving price lines/series from the disposed chart registered.
-    const refs = chartRefs.current;
-
-    const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
-
-    // Cleanup previous
-    const prev = chartRefs.current;
-    if (prev.unsubscribeSync) prev.unsubscribeSync();
-    if (prev.resizeObserver) prev.resizeObserver.disconnect();
-    if (prev.candleSeries) {
-      try { prev.priceLines.forEach((l) => prev.candleSeries?.removePriceLine(l)); } catch {}
-      try { prev.fibLines.forEach((l) => prev.candleSeries?.removePriceLine(l)); } catch {}
-    }
-    if (chartRef.current) {
-      try { chartRef.current.remove(); } catch {}
-      chartRef.current = null;
-    }
-    if (rsiChartRef.current) {
-      try { rsiChartRef.current.remove(); } catch {}
-      rsiChartRef.current = null;
-    }
-    if (macdChartRef.current) {
-      try { macdChartRef.current.remove(); } catch {}
-      macdChartRef.current = null;
-    }
-
-    const chart = createMainChart(container, chartHeight, theme);
+    if (!container) return;
+    const handle = refs.current;
+    const chart = createMainChart(container, latest.current.chartHeight, theme);
     chartRef.current = chart;
-
+    const config = PAIRS_CONFIG[symbol] || { pipDecimal: 4 };
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#22c55e',
-      downColor: '#ef4444',
-      borderVisible: false,
-      wickUpColor: '#22c55e',
-      wickDownColor: '#ef4444',
-      priceFormat: {
-        type: 'price',
-        precision: config.pipDecimal + 1,
-        minMove: 1 / Math.pow(10, config.pipDecimal + 1),
-      },
+      upColor: '#22c55e', downColor: '#ef4444', borderVisible: false, wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+      priceFormat: { type: 'price', precision: config.pipDecimal + 1, minMove: 1 / 10 ** (config.pipDecimal + 1) },
     });
-    candleSeries.setData(toCandlestickData(data));
-    chartRefs.current.candleSeries = candleSeries;
-
-    const smaSeries = indicators.sma ? createSmaSeries(chart, data) : null;
-    const emaSeries = indicators.ema ? createEmaSeries(chart, data) : null;
-    const bbSeries = indicators.bollinger ? createBollingerSeries(chart, data) : null;
-    const fibLines = indicators.fibonacci ? createFibonacciPriceLines(candleSeries, data, symbol) : [];
-
-    chartRefs.current.smaSeries = smaSeries;
-    chartRefs.current.emaSeries = emaSeries;
-    chartRefs.current.bbSeries = bbSeries;
-    chartRefs.current.fibLines = fibLines;
-
-    // Initial drawings (will be updated via separate effect)
-    const activePriceLines = createHorizontalPriceLines(candleSeries, drawingsRef.current.horizontalLines);
-    const activeTrendlineSeries = createTrendlineSeries(chart, drawingsRef.current.trendlines);
-    chartRefs.current.priceLines = activePriceLines;
-    chartRefs.current.trendlineSeries = activeTrendlineSeries;
-
-    createSeriesMarkers(
-      candleSeries,
-      buildChartMarkers({
-        patterns: visibleChartPatterns,
-        highlightedPatternId: highlightedPattern ? highlightedPattern.id : null,
-        annotations: drawingsRef.current.annotations,
-        trendlineStart: trendlineStartRef.current,
-        trendlineStartColor: selectedColorRef.current,
-      })
-    );
-
-    let rsiChart: IChartApi | null = null;
-    if (indicators.rsi && !isRsiMinimized) {
-      rsiChart = createRsiSubChart(rsiContainerRef.current, data, theme, isExpandedFullScreen ? 110 : 100);
-      rsiChartRef.current = rsiChart;
-    }
-
-    let macdChart: IChartApi | null = null;
-    if (indicators.macd && !isMacdMinimized) {
-      const macdResult = createMacdSubChart(macdContainerRef.current, data, theme, isExpandedFullScreen ? 110 : 100);
-      if (macdResult) {
-        macdChart = macdResult.chart;
-        macdChartRef.current = macdChart;
-      }
-    }
-
-    const subCharts: IChartApi[] = [];
-    if (rsiChart) subCharts.push(rsiChart);
-    if (macdChart) subCharts.push(macdChart);
-    const unsubscribeSync = syncTimeScales(chart, subCharts);
-    chartRefs.current.unsubscribeSync = unsubscribeSync;
-
-    const rsiValues = indicators.rsi ? computeRSI(data, 14) : null;
-
-    chart.timeScale().setVisibleRange({
-      from: data[Math.max(0, data.length - 60)].time as UTCTimestamp,
-      to: data[data.length - 1].time as UTCTimestamp,
-    });
-
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (entries.length === 0 || !containerRef.current) return;
-      const { width } = entries[0].contentRect;
-      chart.resize(width, chartHeight);
-      if (rsiChartRef.current && rsiContainerRef.current) {
-        rsiChartRef.current.resize(width, isExpandedFullScreen ? 110 : 100);
-      }
-      if (macdChartRef.current && macdContainerRef.current) {
-        macdChartRef.current.resize(width, isExpandedFullScreen ? 110 : 100);
-      }
-    });
-    resizeObserver.observe(container);
-    chartRefs.current.resizeObserver = resizeObserver;
-
-    const handleDblClick = () => chart.timeScale().fitContent();
-    container.addEventListener('dblclick', handleDblClick);
-
+    handle.candle = candleSeries; handle.data = []; handle.fitted = false;
+    const markers = createSeriesMarkers(candleSeries, []);
+    handle.markers = markers;
     const handleChartClick = (param: MouseEventParams) => {
+      const { setDrawings, setActiveTool, setTrendlineStart, setFibStart } = latest.current;
       if (!param.point || !param.time) return;
       const price = candleSeries.coordinateToPrice(param.point.y);
       if (price === null) return;
       const clickedTime = toEpochSeconds(param.time);
       if (clickedTime === undefined) return;
 
-      if (activeToolRef.current === 'horizontal') {
+      if (latest.current.activeTool === 'horizontal') {
         setDrawings((prev) => ({
           ...prev,
-          horizontalLines: [...prev.horizontalLines, { price: parseFloat(price.toFixed(config.pipDecimal + 1)), color: selectedColorRef.current }],
+          horizontalLines: [...prev.horizontalLines, { price: parseFloat(price.toFixed(config.pipDecimal + 1)), color: latest.current.selectedColor }],
         }));
         setActiveTool('none');
-      } else if (activeToolRef.current === 'trendline_start') {
+      } else if (latest.current.activeTool === 'trendline_start') {
         setTrendlineStart({ time: clickedTime, price });
         setActiveTool('trendline_end');
-      } else if (activeToolRef.current === 'trendline_end' && trendlineStartRef.current) {
-        const start = trendlineStartRef.current;
+      } else if (latest.current.activeTool === 'trendline_end' && latest.current.trendlineStart) {
+        const start = latest.current.trendlineStart;
         setDrawings((prev) => ({
           ...prev,
-          trendlines: [...prev.trendlines, { start, end: { time: clickedTime, price }, color: selectedColorRef.current }],
+          trendlines: [...prev.trendlines, { start, end: { time: clickedTime, price }, color: latest.current.selectedColor }],
         }));
         setTrendlineStart(null);
         setActiveTool('none');
-      } else if (activeToolRef.current === 'rr_long' || activeToolRef.current === 'rr_short') {
-        const rrType = activeToolRef.current === 'rr_long' ? 'long' : 'short';
+      } else if (latest.current.activeTool === 'rr_long' || latest.current.activeTool === 'rr_short') {
+        const rrType = latest.current.activeTool === 'rr_long' ? 'long' : 'short';
         const tool = newRiskRewardTool(rrType, { time: clickedTime, price }, symbol);
         setDrawings((prev) => ({ ...prev, riskRewards: [...(prev.riskRewards || []), tool] }));
         setActiveTool('none');
-      } else if (activeToolRef.current === 'fib_start') {
+      } else if (latest.current.activeTool === 'fib_start') {
         setFibStart({ time: clickedTime, price });
         setActiveTool('fib_end');
-      } else if (activeToolRef.current === 'fib_end' && fibStartRef.current) {
-        const start = fibStartRef.current;
+      } else if (latest.current.activeTool === 'fib_end' && latest.current.fibStart) {
+        const start = latest.current.fibStart;
         setDrawings((prev) => ({
           ...prev,
-          fibonacci: [...(prev.fibonacci || []), { id: Date.now().toString(), start, end: { time: clickedTime, price }, color: selectedColorRef.current }],
+          fibonacci: [...(prev.fibonacci || []), { id: Date.now().toString(), start, end: { time: clickedTime, price }, color: latest.current.selectedColor }],
         }));
         setFibStart(null);
         setActiveTool('none');
-      } else if (activeToolRef.current === 'annotation') {
+      } else if (latest.current.activeTool === 'annotation') {
         const text = window.prompt('Enter text for label annotation:');
         if (text && text.trim()) {
           setDrawings((prev) => ({
             ...prev,
-            annotations: [...prev.annotations, { time: clickedTime, price, text: text.trim(), color: selectedColorRef.current }],
+            annotations: [...prev.annotations, { time: clickedTime, price, text: text.trim(), color: latest.current.selectedColor }],
           }));
         }
         setActiveTool('none');
       }
     };
-    chart.subscribeClick(handleChartClick);
-
     const updateCustomOverlays = () => {
-      const cs = chartRefs.current.candleSeries;
+      const { data } = latest.current;
+      const cs = refs.current.candle;
       if (!cs || !chart) return;
 
-      (drawingsRef.current.riskRewards || []).forEach((tool) => {
+      (latest.current.drawings.riskRewards || []).forEach((tool) => {
         const el = document.getElementById(`rr-tool-${tool.id}`);
         if (!el) return;
         const startX = chart.timeScale().timeToCoordinate(tool.entry.time as UTCTimestamp);
@@ -366,7 +153,7 @@ export function useChartCore(params: UseChartCoreParams): void {
         el.style.setProperty('--entry-y', `${entryY}px`);
       });
 
-      (drawingsRef.current.fibonacci || []).forEach((tool) => {
+      (latest.current.drawings.fibonacci || []).forEach((tool) => {
         const el = document.getElementById(`fib-tool-${tool.id}`);
         if (!el) return;
         const times = [tool.start.time, tool.end.time].sort((a, b) => a - b);
@@ -393,8 +180,8 @@ export function useChartCore(params: UseChartCoreParams): void {
         });
       });
 
-      if (showSessionShadingRef.current && sessionBlocksRef.current.length > 0) {
-        sessionBlocksRef.current.forEach((block) => {
+      if (latest.current.showSessionShading && latest.current.sessionBlocks.length > 0) {
+        latest.current.sessionBlocks.forEach((block) => {
           const el = document.getElementById(`session-band-${block.id}`);
           if (!el) return;
           const startX = chart.timeScale().timeToCoordinate(block.startTime as UTCTimestamp);
@@ -412,9 +199,9 @@ export function useChartCore(params: UseChartCoreParams): void {
         });
       }
 
-      if (showTradeAnimationsRef.current && tradesRef.current.length > 0) {
+      if (latest.current.showTradeAnimations && latest.current.symbolTradesToAnimate.length > 0) {
         const latestCandle = data.length > 0 ? data[data.length - 1] : null;
-        tradesRef.current.forEach((trade) => {
+        latest.current.symbolTradesToAnimate.forEach((trade) => {
           const el = document.getElementById(`trade-anim-overlay-${trade.id}`);
           if (!el || !latestCandle) return;
           let entryCandle = latestCandle;
@@ -431,8 +218,8 @@ export function useChartCore(params: UseChartCoreParams): void {
           el.style.display = 'block';
           el.style.left = `${entryX}px`;
           el.style.top = `${entryY}px`;
-          const pattern = patternsRef.current?.find((p) => p.time <= entryCandle.time);
-          if (pattern && showPatternBeamsRef.current) {
+          const pattern = latest.current.patterns?.find((p) => p.time <= entryCandle.time);
+          if (pattern && latest.current.showPatternBeams) {
             const patX = chart.timeScale().timeToCoordinate(pattern.time as UTCTimestamp);
             const patY = cs.priceToCoordinate(entryCandle.close);
             if (patX !== null && patY !== null) {
@@ -453,141 +240,143 @@ export function useChartCore(params: UseChartCoreParams): void {
       }
     };
 
-    const handleCrosshairMove = (param: MouseEventParams) => {
+
+    handle.redraw = updateCustomOverlays;
+    const crosshair = (event: MouseEventParams) => {
       updateCustomOverlays();
-      if (!param.point || param.time === undefined || param.point.x < 0 || param.point.x > (container.clientWidth || 0) || param.point.y < 0 || param.point.y > (container.clientHeight || 0)) {
-        setHudData(null);
-        return;
-      }
-      const dataPoint = param.seriesData.get(candleSeries) as BarData | undefined;
-      if (!dataPoint) { setHudData(null); return; }
-
-      let rsiVal: number | undefined;
-      if (rsiValues) {
-        const idx = data.findIndex((d) => d.time === toEpochSeconds(param.time));
-        const raw = idx >= 0 ? rsiValues[idx] : null;
-        if (raw !== null && raw !== undefined) rsiVal = raw;
-      }
-
-      const smaPoint = smaSeries ? (param.seriesData.get(smaSeries) as LineData | undefined) : undefined;
-      const emaPoint = emaSeries ? (param.seriesData.get(emaSeries) as LineData | undefined) : undefined;
-      const bbUpperPoint = bbSeries ? (param.seriesData.get(bbSeries.upper) as LineData | undefined) : undefined;
-      const bbLowerPoint = bbSeries ? (param.seriesData.get(bbSeries.lower) as LineData | undefined) : undefined;
-
-      setHudData({
-        open: dataPoint.open,
-        high: dataPoint.high,
-        low: dataPoint.low,
-        close: dataPoint.close,
-        date: formatChartTime(param.time),
-        sma: smaPoint?.value,
-        ema: emaPoint?.value,
-        bbUpper: bbUpperPoint?.value,
-        bbLower: bbLowerPoint?.value,
-        rsi: rsiVal,
-      });
+      const p = latest.current;
+      if (!event.point || event.time === undefined || event.point.x < 0 || event.point.y < 0) { p.setHudData(null); return; }
+      const bar = event.seriesData.get(candleSeries) as BarData | undefined;
+      if (!bar) { p.setHudData(null); return; }
+      const h = refs.current;
+      const read = (s: ISeriesApi<'Line'> | null) => s ? (event.seriesData.get(s) as LineData | undefined)?.value : undefined;
+      const i = p.data.findIndex(c => c.time === toEpochSeconds(event.time));
+      p.setHudData({ open: bar.open, high: bar.high, low: bar.low, close: bar.close, date: formatChartTime(event.time),
+        sma: read(h.sma), ema: read(h.ema), bbUpper: read(h.bb?.upper ?? null), bbLower: read(h.bb?.lower ?? null), rsi: h.rsiValues[i] ?? undefined });
     };
-
-    chart.subscribeCrosshairMove(handleCrosshairMove);
+    const resize = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width;
+      if (!width) return;
+      const p = latest.current;
+      chart.resize(width, p.chartHeight);
+      refs.current.rsi?.chart.resize(width, p.isExpandedFullScreen ? 110 : 100);
+      refs.current.macd?.chart.resize(width, p.isExpandedFullScreen ? 110 : 100);
+      updateCustomOverlays();
+    });
+    resize.observe(container);
+    const fit = () => chart.timeScale().fitContent();
+    container.addEventListener('dblclick', fit);
+    chart.subscribeClick(handleChartClick);
+    chart.subscribeCrosshairMove(crosshair);
     chart.timeScale().subscribeVisibleLogicalRangeChange(updateCustomOverlays);
     chart.timeScale().subscribeSizeChange(updateCustomOverlays);
-    const initialOverlayTimer = setTimeout(updateCustomOverlays, 50);
-
     return () => {
-      clearTimeout(initialOverlayTimer);
-      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(updateCustomOverlays); } catch {}
-      try { chart.timeScale().unsubscribeSizeChange(updateCustomOverlays); } catch {}
-      resizeObserver.disconnect();
-      container.removeEventListener('dblclick', handleDblClick);
-      if (refs.unsubscribeSync) refs.unsubscribeSync();
-      try { chart.unsubscribeClick(handleChartClick); } catch {}
-      try { chart.unsubscribeCrosshairMove(handleCrosshairMove); } catch {}
-      try { refs.priceLines.forEach((line) => candleSeries.removePriceLine(line)); } catch {}
-      try { if (indicators.fibonacci) refs.fibLines.forEach((line) => candleSeries.removePriceLine(line)); } catch {}
-      try { refs.trendlineSeries.forEach((s) => chart.removeSeries(s)); } catch {}
-      if (chartRef.current) {
-        try { chartRef.current.remove(); } catch {}
-        chartRef.current = null;
-      }
-      if (rsiChartRef.current) {
-        try { rsiChartRef.current.remove(); } catch {}
-        rsiChartRef.current = null;
-      }
-      if (macdChartRef.current) {
-        try { macdChartRef.current.remove(); } catch {}
-        macdChartRef.current = null;
-      }
-      refs.candleSeries = null; // use the captured object, not the live ref, in cleanup
+      resize.disconnect(); container.removeEventListener('dblclick', fit);
+      chart.unsubscribeClick(handleChartClick); chart.unsubscribeCrosshairMove(crosshair);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(updateCustomOverlays);
+      chart.timeScale().unsubscribeSizeChange(updateCustomOverlays);
+      handle.syncCleanup?.(); handle.syncCleanup = null;
+      markers.detach(); chart.remove();
+      chartRef.current = null;
+      handle.candle = null; handle.markers = null; handle.redraw = null;
+      handle.priceLines = []; handle.trendlines = []; handle.fib = [];
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, theme, chartHeight, isExpandedFullScreen, isRsiMinimized, isMacdMinimized, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, data.length]);
+  }, [containerRef, chartRef, symbol, timeframe, theme]);
 
-  // Incremental update: use update() for same-length (live-tick) changes and setData() only
-  // when a new bar has appeared. This avoids a full dataset repaint on every tick.
-  const prevDataLenRef = useRef<number>(0);
   useEffect(() => {
-    const cs = chartRefs.current.candleSeries;
-    if (!cs || data.length === 0) return;
-    try {
-      if (prevDataLenRef.current === data.length) {
-        // Same bar: update in place
-        const last = data[data.length - 1];
-        cs.update({
-          time: last.time as UTCTimestamp,
-          open: last.open,
-          high: last.high,
-          low: last.low,
-          close: last.close,
-        });
-      } else {
-        cs.setData(toCandlestickData(data));
-        prevDataLenRef.current = data.length;
-      }
-    } catch {
-      // If update/setData fails (e.g., series removed), ignore
-    }
-  }, [data]);
+    const chart = chartRef.current;
+    if (!chart) return;
+    const h = refs.current;
+    const data = latest.current.data;
+    h.sma = indicators.sma ? createSmaSeries(chart, data) : null;
+    h.ema = indicators.ema ? createEmaSeries(chart, data) : null;
+    h.bb = indicators.bollinger ? createBollingerSeries(chart, data) : null;
+    const created = [h.sma, h.ema, h.bb?.upper, h.bb?.lower, h.bb?.basis].filter(Boolean) as ISeriesApi<'Line'>[];
+    return () => {
+      if (chartRef.current === chart) created.forEach(series => chart.removeSeries(series));
+      h.sma = null; h.ema = null; h.bb = null;
+    };
+  }, [chartRef, symbol, timeframe, theme, indicators.sma, indicators.ema, indicators.bollinger]);
 
-  // Update markers when patterns or highlighted changes
   useEffect(() => {
-    const cs = chartRefs.current.candleSeries;
-    if (!cs) return;
-    try {
-      createSeriesMarkers(
-        cs,
-        buildChartMarkers({
-          patterns: visibleChartPatterns,
-          highlightedPatternId: highlightedPattern ? highlightedPattern.id : null,
-          annotations: drawingsRef.current.annotations,
-          trendlineStart: trendlineStartRef.current,
-          trendlineStartColor: selectedColorRef.current,
-        })
-      );
-    } catch {}
-  }, [visibleChartPatterns, highlightedPattern, drawings]);
+    const chart = chartRef.current;
+    if (!chart) return;
+    const h = refs.current;
+    const data = latest.current.data;
+    const rsi = indicators.rsi && !isRsiMinimized ? createRsiSubChart(rsiContainerRef.current, data, theme, isExpandedFullScreen ? 110 : 100) : null;
+    const macd = indicators.macd && !isMacdMinimized ? createMacdSubChart(macdContainerRef.current, data, theme, isExpandedFullScreen ? 110 : 100) : null;
+    h.rsi = rsi; h.macd = macd;
+    rsiChartRef.current = rsi?.chart ?? null; macdChartRef.current = macd?.chart ?? null;
+    const children = [rsi?.chart, macd?.chart].filter(Boolean) as IChartApi[];
+    const unsubscribe = syncTimeScales(chart, children);
+    h.syncCleanup = unsubscribe;
+    const range = chart.timeScale().getVisibleLogicalRange();
+    if (range) children.forEach(child => child.timeScale().setVisibleLogicalRange(range));
+    return () => {
+      unsubscribe(); rsi?.chart.remove(); macd?.chart.remove();
+      rsiChartRef.current = null; macdChartRef.current = null; h.rsi = null; h.macd = null;
+    };
+  }, [chartRef, symbol, timeframe, theme, indicators.rsi, indicators.macd, isRsiMinimized, isMacdMinimized, isExpandedFullScreen, rsiContainerRef, macdContainerRef, rsiChartRef, macdChartRef]);
 
-  // Sync drawings price lines without full teardown
   useEffect(() => {
-    const cs = chartRefs.current.candleSeries;
+    const width = containerRef.current?.clientWidth;
+    if (!width) return;
+    chartRef.current?.resize(width, chartHeight);
+    refs.current.rsi?.chart.resize(width, isExpandedFullScreen ? 110 : 100);
+    refs.current.macd?.chart.resize(width, isExpandedFullScreen ? 110 : 100);
+  }, [containerRef, chartRef, chartHeight, isExpandedFullScreen]);
+
+  useEffect(() => {
+    const h = refs.current;
+    const cs = h.candle;
     const chart = chartRef.current;
     if (!cs || !chart) return;
+    const prev = h.data;
+    const incremental = prev.length > 0 && data.length >= prev.length && prev.slice(0, -1).every((bar, i) => bar === data[i]) && prev.at(-1)?.time === data[prev.length - 1]?.time;
+    if (incremental) toCandlestickData(data.slice(prev.length - 1)).forEach(bar => cs.update(bar));
+    else {
+      const range = chart.timeScale().getVisibleRange();
+      cs.setData(toCandlestickData(data));
+      if (h.fitted && range && data.length > 1) chart.timeScale().setVisibleRange(range);
+    }
+    h.data = data;
+    h.sma?.setData(toLineValues(data, computeSMA(data, 20)));
+    h.ema?.setData(toLineValues(data, computeEMA(data, 50)));
+    if (h.bb) {
+      const bb = computeBollingerBands(data, 20, 2);
+      h.bb.upper.setData(toLineValues(data, bb.upper)); h.bb.lower.setData(toLineValues(data, bb.lower)); h.bb.basis.setData(toLineValues(data, bb.basis));
+    }
+    h.rsiValues = computeRSI(data, 14);
+    h.rsi?.series.setData(toLineValues(data, h.rsiValues));
+    if (h.macd) {
+      const macd = computeMACD(data);
+      h.macd.macd.setData(toLineValues(data, macd.macd)); h.macd.signal.setData(toLineValues(data, macd.signal));
+      h.macd.histogram.setData(toLineValues(data, macd.histogram).map(point => ({ ...point, color: point.value >= 0 ? 'rgba(34,197,94,.45)' : 'rgba(239,68,68,.45)' })));
+    }
+    h.fib.forEach(line => cs.removePriceLine(line));
+    h.fib = indicators.fibonacci ? createFibonacciPriceLines(cs, data, symbol) : [];
+    if (!h.fitted && data.length) {
+      if (data.length > 1) chart.timeScale().setVisibleRange({ from: data[Math.max(0, data.length - 60)].time as UTCTimestamp, to: data[data.length - 1].time as UTCTimestamp });
+      else chart.timeScale().fitContent();
+      h.fitted = true;
+    }
+    h.redraw?.();
+  }, [data, chartRef, symbol, timeframe, theme, indicators.sma, indicators.ema, indicators.bollinger, indicators.fibonacci, indicators.rsi, indicators.macd, isRsiMinimized, isMacdMinimized, isExpandedFullScreen]);
 
-    // Remove old price lines
-    try {
-      chartRefs.current.priceLines.forEach((l) => cs.removePriceLine(l));
-    } catch {}
-    try {
-      chartRefs.current.trendlineSeries.forEach((s) => chart.removeSeries(s));
-    } catch {}
-
-    const newPriceLines = createHorizontalPriceLines(cs, drawings.horizontalLines);
-    const newTrendlines = createTrendlineSeries(chart, drawings.trendlines);
-    chartRefs.current.priceLines = newPriceLines;
-    chartRefs.current.trendlineSeries = newTrendlines;
-  }, [drawings.horizontalLines, drawings.trendlines, chartRef]);
-
-  // Keep drawings ref up to date
   useEffect(() => {
-    drawingsRef.current = drawings;
-  }, [drawings]);
+    refs.current.markers?.setMarkers(buildChartMarkers({ patterns: visibleChartPatterns,
+      highlightedPatternId: highlightedPattern?.id ?? null, annotations: drawings.annotations,
+      trendlineStart, trendlineStartColor: selectedColor }));
+  }, [visibleChartPatterns, highlightedPattern, drawings.annotations, trendlineStart, selectedColor, symbol, timeframe, theme]);
+
+  useEffect(() => {
+    const h = refs.current;
+    const cs = h.candle;
+    const chart = chartRef.current;
+    if (!cs || !chart) return;
+    h.priceLines.forEach(line => cs.removePriceLine(line)); h.trendlines.forEach(series => chart.removeSeries(series));
+    h.priceLines = createHorizontalPriceLines(cs, drawings.horizontalLines);
+    h.trendlines = createTrendlineSeries(chart, drawings.trendlines);
+  }, [chartRef, drawings.horizontalLines, drawings.trendlines, symbol, timeframe, theme]);
+  useEffect(() => { refs.current.redraw?.(); }, [params]);
 }

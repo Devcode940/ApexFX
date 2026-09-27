@@ -1,3 +1,5 @@
+> Historical notes — not current verification or deployment instructions. See [IMPLEMENTATION-2026-09-23.md](IMPLEMENTATION-2026-09-23.md) and [DEPLOYMENT.md](DEPLOYMENT.md) for the current changes and remaining gates.
+
 # ApexFX Terminal — Deep Code Review (post-refactor)
 
 **Repo:** Devcode940/ApexFX  

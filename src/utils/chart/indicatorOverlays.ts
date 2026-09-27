@@ -221,7 +221,7 @@ export function createRsiSubChart(
   data: Candlestick[],
   theme: ChartTheme,
   height: number
-): IChartApi | null {
+): { chart: IChartApi; series: ISeriesApi<'Line'> } | null {
   if (!container) return null;
   const chart = createSubChart(container, height, theme);
   const series = chart.addSeries(LineSeries, {
@@ -246,7 +246,7 @@ export function createRsiSubChart(
     axisLabelVisible: true });
 
   series.setData(toLineValues(data, computeRSI(data, 14)));
-  return chart;
+  return { chart, series };
 }
 
 export interface MacdSeriesResult {
@@ -316,13 +316,13 @@ export function buildChartMarkers(input: ChartMarkerInput): ChartMarker[] {
   for (const p of input.patterns) {
     const isHighlighted = input.highlightedPatternId !== null && input.highlightedPatternId === p.id;
     const iconPrefix = p.type === 'bullish' ? '🟢' : p.type === 'bearish' ? '🔴' : '⚪';
-    const winRateText = p.winRate ? ` (${p.winRate}%)` : '';
+    const confluenceText = p.confluence ? ` (${p.confluence}/100)` : '';
     markers.push({
       time: p.time as UTCTimestamp,
       position: p.type === 'bullish' ? 'belowBar' : p.type === 'bearish' ? 'aboveBar' : 'inBar',
       color: p.type === 'bullish' ? '#10b981' : p.type === 'bearish' ? '#f43f5e' : '#a1a1aa',
       shape: p.type === 'bullish' ? 'arrowUp' : p.type === 'bearish' ? 'arrowDown' : 'circle',
-      text: `${isHighlighted ? '⭐ ' : ''}${iconPrefix} ${p.name}${winRateText}`,
+      text: `${isHighlighted ? '⭐ ' : ''}${iconPrefix} ${p.name}${confluenceText}`,
       size: isHighlighted ? 2.8 : 1.5 });
   }
 
@@ -346,7 +346,7 @@ export function buildChartMarkers(input: ChartMarkerInput): ChartMarker[] {
       size: 1.2 });
   }
 
-  return markers;
+  return markers.sort((a, b) => Number(a.time) - Number(b.time));
 }
 
 /**
@@ -381,7 +381,8 @@ export function syncTimeScales(mainChart: IChartApi, subCharts: IChartApi[]): ()
     });
   }
 
-  return () => cleanup.forEach((fn) => fn());
+  let disposed = false;
+  return () => { if (disposed) return; disposed = true; cleanup.forEach((fn) => fn()); };
 }
 
 /** Format a lightweight-charts Time value into a displayable date string. */

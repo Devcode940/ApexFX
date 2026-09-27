@@ -1,3 +1,4 @@
+import { TIMEFRAMES, TIME_CONFIG } from '../../../shared/timeframes';
 import React from 'react';
 import { motion } from 'motion/react';
 import {
@@ -109,7 +110,7 @@ const PATTERN_FILTERS: { id: PatternMarkerFilter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'bullish', label: 'Bullish' },
   { id: 'bearish', label: 'Bearish' },
-  { id: 'high_winrate', label: 'High Win%' },
+  { id: 'high_confluence', label: 'High score' },
 ];
 
 const ANIM_FILTERS: { id: AnimTradeFilter; label: string }[] = [
@@ -287,7 +288,7 @@ export const ChartSidebar: React.FC<ChartSidebarProps> = (props) => {
                           {isBullish ? '▲' : '▼'}
                         </span>
                         <span className="truncate">{pat.name}</span>
-                        {pat.winRate && <span className="text-[9px] text-zinc-500 font-bold">{pat.winRate}%</span>}
+                        {pat.confluence && <span className="text-[9px] text-zinc-500 font-bold">{pat.confluence}/100</span>}
                       </div>
                       {isHighlighted && <span className="text-emerald-400 text-[9px]">⭐</span>}
                     </div>
@@ -539,9 +540,11 @@ export const ChartSidebar: React.FC<ChartSidebarProps> = (props) => {
           <div className="flex flex-col gap-1.5">
             <span className={`text-[10px] font-mono font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-zinc-400' : 'text-zinc-500'}`}>Quick Timeframe</span>
             <div className="flex gap-1">
-              {(['1m', '5m', '15m', '1h', '4h', '1d'] as Timeframe[]).map((tf) => (
+              {TIMEFRAMES.map((tf) => (
                 <button
                   key={tf}
+                  title={TIME_CONFIG[tf].label}
+                  aria-pressed={timeframe === tf}
                   type="button"
                   onClick={() => setSelectedTimeframe(tf)}
                   className={`px-1.5 py-1 rounded text-[9px] font-mono font-bold cursor-pointer border transition-all flex-1 ${

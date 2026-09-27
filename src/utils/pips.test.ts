@@ -79,8 +79,8 @@ describe('pipValueUsd', () => {
   });
 
   it('does not invent a USD figure when the rate is unavailable', () => {
-    // Returns the quote-currency amount and lets the caller decide, instead of keeping a stale 6.5.
-    expect(pipValueUsd('USDJPY', 1)).toBe(1000);
+    // Missing conversion is explicitly unavailable, never an unlabeled quote-currency amount.
+    expect(pipValueUsd('USDJPY', 1)).toBeNull();
   });
 
   it('prices a CAD pip in dollars, not in 10 CAD (the old table returned 10.00)', () => {

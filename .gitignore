@@ -96,3 +96,7 @@ coverage.xml
 *.tmp
 *~
 ```
+
+# Playwright
+test-results/
+playwright-report/

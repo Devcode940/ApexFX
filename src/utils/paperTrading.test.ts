@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { TradePosition, WatchlistItem } from '../types';
+import type { TradePosition } from '../types';
+import type { MarketQuote } from '../../shared/market';
 import {
   buildClosedTrade,
   computePnl,
@@ -35,14 +36,14 @@ const pos = (over: Partial<TradePosition> = {}): TradePosition => ({
   ...over,
 });
 
-const quote = (symbol: string, price: number): WatchlistItem => ({
+const quote = (symbol: string, price: number): MarketQuote => ({
   symbol,
-  name: symbol,
   price,
   change: 0,
   high: price,
   low: price,
-} as WatchlistItem);
+  provider: 'twelvedata', providerSymbol: symbol, instrumentKind: 'spot', asOf: 2000, receivedAt: 2000,
+});
 
 describe('computePnl', () => {
   it('prices a long against the contract size', () => {
@@ -141,13 +142,13 @@ describe('markToMarket', () => {
     expect(r.positions[0].currentPrice).toBe(1.101);
   });
 
-  it('closes on stop loss at the stop price, not the market price', () => {
+  it('closes through a stop at the adverse observed gap price', () => {
     const r = markToMarket([pos({ sl: 1.089 })], [quote('EURUSD', 1.085)], 5_000);
     expect(r.positions).toHaveLength(0);
     expect(r.closed).toHaveLength(1);
     expect(r.closed[0].closeReason).toBe('SL Hit');
-    expect(r.closed[0].exitPrice).toBe(1.089); // gap through the stop still fills at the stop
-    expect(r.closed[0].pnl).toBe(-1100); // 11 pips x 100k units
+    expect(r.closed[0].exitPrice).toBe(1.085); // observed gap, not an idealized stop fill
+    expect(r.closed[0].pnl).toBe(-1500); // 150 pips x 100k units
     expect(r.closed[0].durationMs).toBe(4000);
   });
 
@@ -160,16 +161,16 @@ describe('markToMarket', () => {
 
     const slOnly = markToMarket([pos({ sl: 1.05, tp: 1.15 })], [quote('EURUSD', 1.0)], 5_000);
     expect(slOnly.closed[0].closeReason).toBe('SL Hit');
-    expect(slOnly.closed[0].exitPrice).toBe(1.05);
+    expect(slOnly.closed[0].exitPrice).toBe(1.0);
   });
 
   it('resolves to the stop when legacy data stored the pair misordered', () => {
-    // Rows written before validateOrder existed can have sl above tp, which lets one price
-    // satisfy both. The stop must win (worst-case, broker-consistent fill).
+    // Invalid levels are rejected at the import/order boundary. This direct helper case only
+    // pins defensive stop priority; it is not evidence of broker execution.
     const r = markToMarket([pos({ sl: 1.15, tp: 1.05 })], [quote('EURUSD', 1.1)], 5_000);
     expect(r.closed).toHaveLength(1);
     expect(r.closed[0].closeReason).toBe('SL Hit');
-    expect(r.closed[0].exitPrice).toBe(1.15);
+    expect(r.closed[0].exitPrice).toBe(1.1);
   });
 
   it('is a no-op for symbols the feed does not carry', () => {
@@ -188,11 +189,10 @@ describe('buildClosedTrade (manual close)', () => {
     expect(a.id.startsWith('closed_')).toBe(true);
   });
 
-  it('keeps a sane duration when openedAt is missing (legacy localStorage rows)', () => {
+  it('keeps duration unknown when openedAt is missing (legacy localStorage rows)', () => {
     const legacy = { ...pos(), openedAt: undefined } as TradePosition;
     const t = buildClosedTrade({ position: legacy, exitPrice: 1.101, nowMs: 10_000 });
-    expect(t.durationMs).toBeGreaterThan(0);
-    expect(Number.isFinite(t.durationMs!)).toBe(true);
+    expect(t.durationMs).toBeUndefined();
   });
 });
 

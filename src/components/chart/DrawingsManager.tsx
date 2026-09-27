@@ -273,9 +273,9 @@ export const DrawingsManager: React.FC<DrawingsManagerProps> = ({
                         {isBullish ? '▲' : '▼'}
                       </span>
                       <span className="truncate">{pat.name}</span>
-                      {pat.winRate && (
+                      {pat.confluence && (
                         <span className="text-[9px] text-zinc-500 font-bold">
-                          {pat.winRate}%
+                          {pat.confluence}/100
                         </span>
                       )}
                     </div>

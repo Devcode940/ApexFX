@@ -1,88 +1,86 @@
-/**
- * fetch with timeout + user-agent + abort controller.
- *
- * HARDENING NOTES (2026-09-13 review, finding S1.3):
- * The previous version threw `Request timed out after ${ms}ms for ${url}`. Because upstream
- * keys are passed as query params (see commit 6ce497e "restore query-param auth"), that message
- * carried a live API key into every log line and, previously, past the logger's message-only
- * redaction. Errors now reference a *safe* descriptor (host + path, query string dropped).
- */
 import { redact } from './logger.js';
 
 export interface FetchWithTimeoutOptions extends RequestInit {
   timeoutMs?: number;
-  /** Logged name for diagnostics; defaults to "<host><path>". Never include credentials. */
+  maxBytes?: number;
+  /** Diagnostic label must not contain credentials. */
   label?: string;
 }
-
-/** host + pathname only — query/hash (where the secrets live) are discarded. */
 export function safeUrlLabel(url: string): string {
-  try {
-    const u = new URL(url);
-    return `${u.host}${u.pathname}`;
-  } catch {
-    // Not an absolute URL (proxy config, relative path) — redact and truncate defensively.
-    return redact(String(url)).slice(0, 120);
-  }
+  try { const u = new URL(url); return `${u.host}${u.pathname}`; }
+  catch { return redact(String(url).split(/[?#]/)[0]).slice(0, 120); }
 }
-
 export class UpstreamError extends Error {
-  readonly status?: number;
-  readonly kind: 'timeout' | 'http' | 'network';
-  constructor(message: string, kind: UpstreamError['kind'], status?: number) {
-    super(message);
-    this.name = 'UpstreamError';
-    this.kind = kind;
-    this.status = status;
+  constructor(message: string, readonly kind: 'timeout' | 'http' | 'network' | 'aborted' | 'size' | 'parse', readonly status?: number) {
+    super(message); this.name = 'UpstreamError';
   }
 }
 
-export async function fetchWithTimeout(
-  url: string,
-  options: FetchWithTimeoutOptions = {}
-): Promise<Response> {
-  const { timeoutMs = 8000, label, ...fetchOpts } = options;
-  const target = label || safeUrlLabel(url);
+/**
+ * Entire response (headers AND bounded body) shares one deadline and caller cancellation.
+ * Returns a buffered Response so existing .json()/.text() consumers cannot outlive the deadline.
+ * Bounded buffering is intentional for these small JSON proxies; this is NOT a streaming helper.
+ */
+export async function fetchWithTimeout(url: string, options: FetchWithTimeoutOptions = {}): Promise<Response> {
+  const { timeoutMs = 8000, maxBytes = 2 * 1024 * 1024, label, signal: caller, ...init } = options;
+  const target = label ? safeUrlLabel(label) : safeUrlLabel(url);
   const controller = new AbortController();
+  const signal = caller ? AbortSignal.any([caller, controller.signal]) : controller.signal;
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let abortListener: (() => void) | undefined;
+  const abortError = () => new UpstreamError(timedOut ? `Request timed out after ${timeoutMs}ms for ${target}` : `Request cancelled for ${target}`, timedOut ? 'timeout' : 'aborted');
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
-    const res = await fetch(url, {
-      ...fetchOpts,
-      signal: controller.signal,
-      headers: {
-        // Kept byte-identical to the pre-refactor value: upstreams (Yahoo especially) gate on
-        // UA, and I cannot verify egress behaviour from here — so no gratuitous change.
-        'User-Agent': 'ApexFX-Terminal/1.0 (Production)',
-        ...(fetchOpts.headers || {}),
-      },
+    if (signal.aborted) throw abortError();
+    const aborted = new Promise<never>((_, reject) => {
+      abortListener = () => reject(abortError());
+      signal.addEventListener('abort', abortListener, { once: true });
     });
-    return res;
-  } catch (e: any) {
-    if (timedOut || e?.name === 'AbortError') {
-      throw new UpstreamError(`Request timed out after ${timeoutMs}ms for ${target}`, 'timeout');
-    }
-    // Never interpolate the original error verbatim — it can contain the full URL.
-    throw new UpstreamError(
-      `Network request failed for ${target}: ${redact(String(e?.message ?? e))}`,
-      'network'
-    );
+    const task = async () => {
+      const headers = new Headers(init.headers);
+      if (!headers.has('User-Agent')) headers.set('User-Agent', 'ApexFX-Terminal/1.0 (Production)');
+      const response = await fetch(url, { ...init, headers, signal });
+      if (signal.aborted) throw abortError();
+      const declared = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        void response.body?.cancel().catch(() => {});
+        throw new UpstreamError(`Response too large for ${target}`, 'size');
+      }
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      reader = response.body?.getReader();
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (signal.aborted) throw abortError();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) throw new UpstreamError(`Response too large for ${target}`, 'size');
+        chunks.push(value);
+      }
+      const body = Buffer.concat(chunks, bytes);
+      const bufferedHeaders = new Headers(response.headers);
+      bufferedHeaders.delete('content-encoding'); bufferedHeaders.delete('content-length');
+      return new Response([204, 205, 304].includes(response.status) ? null : body, {
+        status: response.status, statusText: response.statusText, headers: bufferedHeaders,
+      });
+    };
+    return await Promise.race([task(), aborted]);
+  } catch (error) {
+    if (error instanceof UpstreamError) throw error;
+    if (signal.aborted) throw abortError();
+    // Never interpolate raw provider error messages, URLs, keys, or response bodies.
+    throw new UpstreamError(`Network request failed for ${target}`, 'network');
   } finally {
     clearTimeout(timer);
+    if (abortListener) signal.removeEventListener('abort', abortListener);
+    if (reader) void reader.cancel().catch(() => {});
+    controller.abort();
   }
 }
-
-export async function fetchJsonWithTimeout<T = any>(
-  url: string,
-  options: FetchWithTimeoutOptions = {}
-): Promise<T> {
-  const res = await fetchWithTimeout(url, options);
-  if (!res.ok) {
-    throw new UpstreamError(`HTTP ${res.status} for ${safeUrlLabel(url)}`, 'http', res.status);
-  }
-  return (await res.json()) as T;
+export async function fetchJsonWithTimeout<T = any>(url: string, options: FetchWithTimeoutOptions = {}): Promise<T> {
+  const response = await fetchWithTimeout(url, options);
+  if (!response.ok) throw new UpstreamError(`HTTP ${response.status} for ${safeUrlLabel(url)}`, 'http', response.status);
+  try { return await response.json() as T; }
+  catch { throw new UpstreamError(`Invalid JSON for ${safeUrlLabel(url)}`, 'parse'); }
 }

@@ -1,13 +1,12 @@
 /**
  * Vercel entry point: one function fronts every /api/* route of the Express app.
  *
- * - The app is exported by server.ts WITHOUT binding a socket there (startServer() is skipped when
- *   process.env.VERCEL is set), so importing it here must not start a listener.
+ * - The app is exported without starting services or listeners. Node startup is server/start.ts.
  * - `vite` is imported dynamically inside startServer() so the function bundle never needs it.
  * - req.url is canonicalised because the rewrite may deliver the original path, the destination,
  *   or the mount-relative remainder (see server/lib/vercel.ts).
- * - WebSockets are not available on Vercel's function runtime; the client's feed therefore settles
- *   into POLL mode (with backoff) against /api/market/prices, which is a supported state.
+ * - Vercel offers WebSockets in Beta, but this HTTP function/rewrite does not wire that transport.
+ *   /api/capabilities advertises polling until routing, lifetimes and shared state are separately verified.
  */
 import type { IncomingMessage, ServerResponse } from 'http';
 import app from '../server';

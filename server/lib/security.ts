@@ -7,10 +7,18 @@ import type { Application, Request, Response, NextFunction } from 'express';
  * dev-only and are NOT used as an allowlist once NODE_ENV=production.
  */
 export function getAllowedOrigins(): string[] {
-  if (process.env.ALLOWED_ORIGINS) {
-    return process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  const configured = (process.env.ALLOWED_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  if (process.env.APP_URL) { try { configured.push(new URL(process.env.APP_URL).origin); } catch { /* invalid config does not grant an origin */ } }
+  return [...new Set(configured.length ? configured : process.env.NODE_ENV === 'production' ? [] : ['http://localhost:5173', 'http://localhost:3000'])];
+}
+/** CSRF/browser boundary only, NEVER account identity. Dev accepts the exact proxied preview host. */
+export function isAllowedBrowserOrigin(origin: string, host?: string): boolean {
+  if (getAllowedOrigins().includes(origin)) return true;
+  if (process.env.NODE_ENV !== 'production') {
+    try { const url = new URL(origin); return ['http:', 'https:'].includes(url.protocol) && url.origin === origin && url.host === host; }
+    catch { return false; }
   }
-  return ['http://localhost:5173', 'http://localhost:3000'];
+  return false;
 }
 
 /**
@@ -114,7 +122,7 @@ export function applyTrustProxy(app: Application): string {
 }
 
 /** Client identity used as a rate-limit key. Never trusts a header the app hasn't opted into. */
-export function sanitizeClientIp(req: Request): string {
+export function sanitizeClientIp(req: { ip?: string; socket?: { remoteAddress?: string } }): string {
   // Express computes req.ip from XFF only when `trust proxy` is enabled; otherwise it is the
   // socket address. That single source of truth removes the spoofing path.
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -148,7 +156,8 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
 
   // Security headers (helmet-like)
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  if (process.env.NODE_ENV === 'production') res.setHeader('X-Frame-Options', 'DENY');
+  else res.removeHeader('X-Frame-Options'); // dev previews are intentionally embedded; production stays frame-denied
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()');
 
@@ -172,8 +181,20 @@ export function securityHeadersMiddleware(req: Request, res: Response, next: Nex
     // A blanket `https:` would have neutered the policy as an exfiltration control, and plain
     // 'self' would silently break cloud sync. So: derive the Supabase host from config, and let
     // operators append anything else explicitly.
-    const connectSrc = new Set<string>(["'self'", 'ws:', 'wss:']);
-    const supabaseUrl = process.env.VITE_SUPABASE_URL;
+    // The app's live transport is always same-origin (ws(s)://<page host>), never a foreign
+    // WebSocket. Blanket ws:/wss: allowed exfiltration to any host, so enumerate the concrete
+    // hosts: the request's own host (behind proxies the forwarded proto wins) plus APP_URL.
+    const connectSrc = new Set<string>(["'self'"]);
+    const forwardProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0]!.trim();
+    const pageProto = forwardProto === 'https' || forwardProto === 'http' ? forwardProto : req.secure ? 'https' : 'http';
+    const rawHost = req.get('host') || '';
+    if (/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(rawHost)) {
+      connectSrc.add(`${pageProto === 'https' ? 'wss' : 'ws'}://${rawHost}`);
+    }
+    for (const candidate of [process.env.APP_URL, process.env.PUBLIC_APP_URL]) {
+      if (candidate) { try { const u = new URL(candidate); connectSrc.add(`wss://${u.host}`); } catch { /* malformed -> ignore */ } }
+    }
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
     if (supabaseUrl) {
       try { connectSrc.add(new URL(supabaseUrl).origin); } catch { /* malformed -> ignore */ }
     }

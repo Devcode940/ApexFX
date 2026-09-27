@@ -1,3 +1,5 @@
+> Historical notes — not current verification or deployment instructions. See [IMPLEMENTATION-2026-09-23.md](IMPLEMENTATION-2026-09-23.md) and [DEPLOYMENT.md](DEPLOYMENT.md) for the current changes and remaining gates.
+
 # Changelog — Deep-Review Fix Pass
 
 Applied fixes per `DEEP_REVIEW.md` on 2026-09-16.

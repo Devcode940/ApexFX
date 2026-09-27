@@ -1,3 +1,4 @@
+import { quoteQuality } from '../../shared/market';
 import React from 'react';
 import { useTrading } from '../context/TradingContext';
 import { TrendingUp, TrendingDown, ArrowRightLeft, PanelLeftClose } from 'lucide-react';
@@ -10,6 +11,9 @@ interface WatchlistProps {
 export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => {
   const {
     watchlistItems: items,
+    watchlistSymbols,
+    addWatchlistSymbol,
+    removeWatchlistSymbol,
     selectedSymbol,
     setSelectedSymbol,
     tickStates,
@@ -17,8 +21,13 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
     startTransition,
     mobileTab,
     setMobileTab,
-    wsConnected,
+    feedStatus,
+    feedSource,
   } = useTrading();
+  // Visible rows follow the user's saved order; the background feed still quotes the whole catalog.
+  const bySymbol = new Map(items.map(item => [item.symbol, item]));
+  const visibleItems = watchlistSymbols.map(symbol => bySymbol.get(symbol)).filter((item): item is NonNullable<typeof item> => !!item);
+  const candidates = items.filter(item => !watchlistSymbols.includes(item.symbol));
 
   const onSelectSymbol = (sym: string) => {
     startTransition(() => {
@@ -48,17 +57,32 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
             <ArrowRightLeft className="w-4 h-4 text-emerald-400" />
           )}
           <h2 className="font-display font-semibold text-sm tracking-wide uppercase text-zinc-200">
-            Live FX Pairs
+            Market watchlist
           </h2>
+          {candidates.length > 0 && (
+            <details className="relative">
+              <summary className="list-none cursor-pointer text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-emerald-400 select-none" title="Add instruments from the covered catalog">+ add</summary>
+              <div className="absolute z-30 mt-1 right-0 w-40 max-h-64 overflow-y-auto rounded border border-zinc-700 bg-zinc-900 shadow-xl">
+                {candidates.map(item => (
+                  <button
+                    key={item.symbol}
+                    onClick={() => addWatchlistSymbol(item.symbol)}
+                    className="block w-full text-left px-2 py-1.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
+                  >{item.symbol.slice(0, 3)}/{item.symbol.slice(3)} <span className="text-zinc-600">{item.name}</span></button>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
         <span className="text-[10px] bg-zinc-800 text-zinc-400 font-mono px-1.5 py-0.5 rounded font-semibold animate-pulse uppercase">
-          Ticking Live
+          {feedStatus}
         </span>
       </div>
 
       {/* Grid List */}
       <div className="divide-y divide-zinc-800/60 overflow-y-auto flex-1 text-xs">
-        {items.map((item) => {
+        {visibleItems.map((item) => {
+          const quality = quoteQuality(item);
           const isSelected = item.symbol === selectedSymbol;
           const isPositive = item.change >= 0;
           const tick = tickStates[item.symbol];
@@ -68,11 +92,13 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
           if (tick === 'down') flashClass = 'tick-red-flash';
 
           return (
+            <div key={item.symbol} className={`relative group ${isSelected ? 'bg-zinc-900/90' : ''}`}>
             <button
-              key={item.symbol}
+              aria-pressed={isSelected}
+              title={`${item.provider ?? 'unknown provider'} · ${item.instrumentKind ?? 'unknown instrument'} · ${quality} · ${item.asOf ? new Date(item.asOf).toISOString() : 'No observation time'}`}
               onClick={() => onSelectSymbol(item.symbol)}
               className={`w-full text-left px-4 py-3 flex items-center justify-between transition-colors outline-none cursor-pointer hover:bg-zinc-900 ${
-                isSelected ? 'bg-zinc-900/90 border-l-2 border-emerald-500' : ''
+                isSelected ? 'border-l-2 border-emerald-500' : ''
               } ${flashClass}`}
               id={`watchlist_btn_${item.symbol}`}
             >
@@ -82,11 +108,11 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
                     {item.symbol.slice(0, 3)}/{item.symbol.slice(3)}
                   </span>
                   <span className="text-[10px] text-zinc-500 font-mono">
-                    {item.spread.toFixed(1)} pip
+                    {item.instrumentKind ?? 'unknown'}
                   </span>
                 </div>
                 <div className="text-[10px] text-zinc-400 uppercase truncate max-w-[120px]">
-                  {item.name}
+                  {item.provider ?? 'No source'} · {item.priceBasis === 'mid' ? 'mid · ' : ''}{quality}
                 </div>
               </div>
 
@@ -96,30 +122,39 @@ export const Watchlist = React.memo<WatchlistProps>(({ onCollapseOverride }) => 
                 </div>
                 <div
                   className={`inline-flex items-center gap-0.5 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                    isPositive ? 'bg-emerald-950/40 text-emerald-400' : 'bg-red-950/40 text-red-400'
+                    item.dayStatsAvailable === false ? 'bg-zinc-900 text-zinc-400' : isPositive ? 'bg-emerald-950/40 text-emerald-400' : 'bg-red-950/40 text-red-400'
                   }`}
                 >
-                  {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  {isPositive ? '+' : ''}
-                  {item.change.toFixed(2)}%
+                  {item.dayStatsAvailable !== false && (isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />)}
+                  {item.dayStatsAvailable === false ? '— day change' : `${isPositive ? '+' : ''}${item.change.toFixed(2)}%`}
                 </div>
               </div>
             </button>
+            {watchlistSymbols.length > 1 && (
+              <button
+                onClick={() => removeWatchlistSymbol(item.symbol)}
+                className="absolute top-1 right-1 hidden group-hover:flex items-center justify-center w-4 h-4 rounded bg-zinc-800 text-zinc-400 hover:text-red-400 text-[10px]"
+                title={`Remove ${item.symbol} from watchlist`}
+                aria-label={`Remove ${item.symbol} from watchlist`}
+              >×</button>
+            )}
+            </div>
           );
         })}
       </div>
 
-      {/* Live feed status (real data only) */}
+      {/* Transport status is distinct from provider cadence/freshness. */}
       <div className="p-3 bg-zinc-900/45 border-t border-zinc-800 text-[11px] text-zinc-500 space-y-1 font-mono">
+        {items.some(item => item.provider === 'tiingo') && <p className="text-[10px]">Tiingo: polled REST snapshots, not tick streaming.</p>}
         <div className="flex justify-between">
           <span>Feed:</span>
-          <span className={wsConnected ? 'text-emerald-400' : 'text-amber-500'}>
-            {wsConnected ? 'WebSocket LIVE' : 'HTTP Polling'}
+          <span className={feedStatus === 'live' ? 'text-emerald-400' : 'text-amber-500'}>
+            {feedStatus}
           </span>
         </div>
         <div className="flex justify-between">
           <span>Source:</span>
-          <span>Yahoo Finance</span>
+          <span>{feedSource ?? 'Unavailable'}</span>
         </div>
       </div>
     </div>

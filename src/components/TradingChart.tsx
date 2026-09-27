@@ -12,7 +12,6 @@ import type {
   AnimatedTrade,
   ChartPoint,
   ChartTheme,
-  DrawingsState,
   DrawingTool,
   HudData,
   PatternMarkerFilter,
@@ -20,7 +19,8 @@ import type {
 } from '../types/chart';
 import { EMPTY_DRAWINGS } from '../types/chart';
 import { useChartCore } from '../hooks/useChartCore';
-import { loadDrawings, saveDrawings } from '../utils/chart/drawingTools';
+import { hasUtcBucketGrid } from '../utils/candles';
+import { useScopedDrawings } from '../hooks/useScopedDrawings';
 import { copySnapshot, SNAPSHOT_COPY_MESSAGE } from '../utils/clipboard';
 import { ChartHeader } from './chart/ChartHeader';
 import { DrawingToolbar } from './chart/DrawingToolbar';
@@ -44,7 +44,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   patterns,
   indicators,
 }) => {
-  const { theme: globalTheme, positions, closedTrades, handleChartSnapshot, handleToggleIndicator } = useTrading();
+  const { theme: globalTheme, positions, closedTrades, handleChartSnapshot, handleToggleIndicator, account, historyStatus, historyError, historyMeta, retryHistory, liveQuote } = useTrading();
   const theme: ChartTheme = globalTheme === 'light' ? 'light' : 'dark';
 
   // --- Price Streak (consecutive candles) ---
@@ -79,7 +79,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   const macdChartRef = React.useRef<IChartApi | null>(null);
 
   // --- Drawing State ---
-  const [drawings, setDrawings] = useState<DrawingsState>(() => loadDrawings(symbol));
+  const { drawings, setDrawings, drawingError, importLegacyDrawings } = useScopedDrawings(symbol, account.owner);
   // What the clipboard actually did, for the last few seconds. Replaces a `catch { }` that made a failed
   // copy indistinguishable from a successful one.
   const [snapshotNote, setSnapshotNote] = useState<string>('');
@@ -151,8 +151,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
   const visibleChartPatterns = useMemo(() => {
     if (!showPatternMarkers) return [];
     if (patternMarkerFilter === 'all') return patterns;
-    if (patternMarkerFilter === 'high_winrate') {
-      return patterns.filter((p) => p.winRate && p.winRate >= 60);
+    if (patternMarkerFilter === 'high_confluence') {
+      return patterns.filter((p) => p.confluence && p.confluence >= 60);
     }
     return patterns.filter((p) => p.type === patternMarkerFilter);
   }, [patterns, showPatternMarkers, patternMarkerFilter]);
@@ -171,7 +171,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       type: p.type,
       entryPrice: p.entryPrice,
       amount: p.amount,
-      pnl: p.pnl,
+      pnl: p.pnl, pnlVersion: p.pnlVersion, pnlQuote: p.pnlQuote, quoteCurrency: p.quoteCurrency,
       time: p.time,
       isClosed: false,
     })));
@@ -181,7 +181,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       type: t.type,
       entryPrice: t.entryPrice,
       amount: t.amount,
-      pnl: t.pnl,
+      pnl: t.pnl, pnlVersion: t.pnlVersion, pnlQuote: t.pnlQuote, quoteCurrency: t.quoteCurrency,
       time: t.time,
       isClosed: true,
       exitPrice: t.exitPrice,
@@ -227,10 +227,9 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
     showPatternBeams,
   });
 
-  // --- Persist drawings per symbol ---
   useEffect(() => {
-    saveDrawings(symbol, drawings);
-  }, [drawings, symbol]);
+    setTrendlineStart(null); setFibStart(null); setActiveTool('none');
+  }, [symbol, account.owner]);
 
   // --- Reset chart autoScale on symbol change ---
   // Fixes: after manual zoom/pan, switching symbols left the chart
@@ -288,7 +287,7 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
       setTrendlineStart(null);
       setFibStart(null);
     }
-  }, []);
+  }, [setDrawings]);
 
   const handleToggleSession = useCallback((key: ForexSessionKey) => {
     setEnabledSessions((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -329,6 +328,16 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
         onToggleFullScreen={() => setIsExpandedFullScreen((v) => !v)}
       />
 
+      <div className="flex flex-wrap gap-2 text-[10px] text-zinc-400" role="status">
+        <span>Chart: {historyMeta?.provider ?? 'unknown'} · {historyMeta?.instrumentKind ?? 'unknown'} · {data.at(-1)?.provisional ? 'partial observed bar' : 'provider history'}</span>
+        {historyMeta && liveQuote && (historyMeta.instrumentKind !== liveQuote.instrumentKind || historyMeta.provider !== liveQuote.source || historyMeta.providerSymbol !== liveQuote.providerSymbol) && <span className="text-amber-400">Quote/chart source mismatch — prices are not merged.</span>}
+        {timeframe === 'W' && <span>W: available daily OHLC · Monday–Sunday UTC · current / incomplete first week is provisional.</span>}
+        {!hasUtcBucketGrid(data, timeframe) && <span>Non-UTC provider grid: history refresh only; quote buckets are not mixed.</span>}
+        {historyError && <span className="text-amber-400">{historyError}</span>}
+        <button className="underline" onClick={retryHistory} disabled={historyStatus === 'loading'}>Retry / refresh history</button>
+        <button className="underline" onClick={() => { if (!window.confirm('Import legacy drawings for this symbol into the current guest/account namespace?')) return; try { importLegacyDrawings(); } catch (error) { setSnapshotNote(String(error)); } }}>Import legacy drawings</button>
+        {drawingError && <span className="text-amber-400">{drawingError}</span>}
+      </div>
       {snapshotNote && (
         <div
           role="status"
@@ -361,8 +370,8 @@ export const TradingChart: React.FC<TradingChartProps> = React.memo(({
             {data.length === 0 && (
               <div className={`absolute inset-0 flex flex-col items-center justify-center gap-2 z-40 ${theme === 'dark' ? 'bg-zinc-900/85 text-zinc-400' : 'bg-white/85 text-zinc-500'}`}>
                 <span className="text-2xl">📡</span>
-                <span className="text-xs font-mono font-semibold">Live market data unavailable</span>
-                <span className="text-[10px] font-mono opacity-70">Waiting for the real-time feed (Yahoo Finance / WebSocket)…</span>
+                <span className="text-xs font-mono font-semibold">{historyStatus === 'loading' ? 'Loading historical candles…' : 'Historical candles unavailable'}</span>
+                <span className="text-[10px] font-mono opacity-70">{historyError ?? 'No valid historical bars yet. Use Retry / refresh history above.'}</span>
               </div>
             )}
 

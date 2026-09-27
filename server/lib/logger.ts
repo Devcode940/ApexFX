@@ -36,7 +36,7 @@ function enabled(level: Level): boolean {
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   // Authorization: Bearer <token>
-  [/Bearer\s+[A-Za-z0-9_.=+-]+/gi, 'Bearer [REDACTED]'],
+  [/\b(Bearer|Token)\s+[A-Za-z0-9_.=+-]+/gi, '$1 [REDACTED]'],
   // ?apikey= / ?api_key= / ?token= / ?secret= / ?password=  (query-string AND json-ish forms).
   // NOTE: intentionally NOT matching a bare `key=` — that produced false positives on ordinary
   // diagnostic strings like `cache key=history:EURUSD:1H`, and no upstream we call uses `key=`.
@@ -86,7 +86,7 @@ export const log = (msg: string, ...args: unknown[]) => emit(console.log, 'info'
 
 export const warn = (msg: string, ...args: unknown[]) => {
   // Preserve the documented SHOW_WARNINGS escape hatch for prod warnings.
-  if (IS_PRODUCTION && process.env.SHOW_WARNINGS !== 'true' && !process.env.LOG_LEVEL) return;
+  if (IS_PRODUCTION && process.env.SHOW_WARNINGS === 'false' && !process.env.LOG_LEVEL) return;
   emit(console.warn, 'warn', msg, args);
 };
 

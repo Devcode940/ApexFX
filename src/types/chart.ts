@@ -77,7 +77,7 @@ export interface HudData {
   bbLower?: number;
 }
 
-export type PatternMarkerFilter = 'all' | 'bullish' | 'bearish' | 'high_winrate';
+export type PatternMarkerFilter = 'all' | 'bullish' | 'bearish' | 'high_confluence';
 export type AnimTradeFilter = 'all' | 'open' | 'closed';
 export type SidebarTab = 'indicators' | 'patterns_sessions' | 'drawings' | 'view_anims';
 
@@ -91,7 +91,10 @@ export interface AnimatedTrade {
   type: 'BUY' | 'SELL';
   entryPrice: number;
   amount: number;
-  pnl: number;
+  pnl: number | null;
+  pnlVersion?: 2;
+  pnlQuote?: number;
+  quoteCurrency?: string;
   time: string;
   isClosed: boolean;
   exitPrice?: number;
